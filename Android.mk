@@ -4,10 +4,22 @@
 
 # Minimal makefile capable of compiling futility to sign images
 
+libvboot_common_warning_flags := \
+    -Wall -Werror \
+    -Wno-address-of-packed-member \
+    -Wno-ignored-qualifiers \
+    -Wno-macro-redefined \
+    -Wno-pointer-arith \
+    -Wno-sign-compare \
+    -Wno-typedef-redefinition \
+    -Wno-unused-parameter \
+
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE := libvboot_util-host
+
+LOCAL_CFLAGS := $(libvboot_common_warning_flags)
 
 ifeq ($(HOST_OS),darwin)
 LOCAL_CFLAGS += -DHAVE_MACOS -DO_LARGEFILE=0
@@ -107,7 +119,7 @@ LOCAL_SRC_FILES := \
 	$(UTILLIB_SRCS)
 
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_C_INCLUDES)
-LOCAL_STATIC_LIBRARIES := libcrypto_static
+LOCAL_STATIC_LIBRARIES := libcrypto
 
 include $(BUILD_HOST_STATIC_LIBRARY)
 
@@ -117,6 +129,8 @@ LOCAL_MODULE := futility-host
 LOCAL_IS_HOST_MODULE := true
 LOCAL_MODULE_CLASS := EXECUTABLES
 generated_sources := $(call local-generated-sources-dir)
+
+LOCAL_CFLAGS := $(libvboot_common_warning_flags)
 
 ifeq ($(HOST_OS),darwin)
 LOCAL_CFLAGS += -DHAVE_MACOS
@@ -177,3 +191,4 @@ LOCAL_STATIC_LIBRARIES := libvboot_util-host
 LOCAL_SHARED_LIBRARIES := libcrypto
 include $(BUILD_HOST_EXECUTABLE)
 
+libvboot_common_warning_flags :=
