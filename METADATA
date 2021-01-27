@@ -1,3 +1,4 @@
 third_party {
-  license_type: NOTICE
+  # would be NOTICE save for scripts/image_signing/lib/shflags/shflags
+  license_type: RESTRICTED
 }
