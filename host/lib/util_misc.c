@@ -29,7 +29,7 @@ void PrintPubKeySha1Sum(VbPublicKey *key)
 	free(digest);
 }
 
-int vb_keyb_from_rsa(struct rsa_st *rsa_private_key,
+int vb_keyb_from_rsa(RSA *rsa_private_key,
 		     uint8_t **keyb_data, uint32_t *keyb_size)
 {
 	uint32_t i, nwords;
@@ -46,7 +46,7 @@ int vb_keyb_from_rsa(struct rsa_st *rsa_private_key,
 	int retval = 1;
 
 	/* Size of RSA key in 32-bit words */
-	nwords = BN_num_bits(rsa_private_key->n) / 32;
+	nwords = RSA_bits(rsa_private_key) / 32;
 
 	bufsize = (2 + nwords + nwords) * sizeof(uint32_t);
 	outbuf = malloc(bufsize);
@@ -75,7 +75,7 @@ int vb_keyb_from_rsa(struct rsa_st *rsa_private_key,
 	NEW_BIGNUM(B);
 #undef NEW_BIGNUM
 
-	BN_copy(N, rsa_private_key->n);
+	BN_copy(N, RSA_get0_n(rsa_private_key));
 	BN_set_word(Big1, 1L);
 	BN_set_word(Big2, 2L);
 	BN_set_word(Big32, 32L);
