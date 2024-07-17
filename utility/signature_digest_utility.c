@@ -1,4 +1,4 @@
-/* Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+/* Copyright 2011 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -11,45 +11,51 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "file_keys.h"
+#include "2common.h"
+#include "2sysincludes.h"
 #include "host_common.h"
-#include "padding.h"
+#include "host_signature21.h"
 #include "signature_digest.h"
 
+int main(int argc, char* argv[])
+{
+	int error_code = -1;
+	uint8_t *buf = NULL;
+	uint8_t *signature_digest = NULL;
+	uint32_t len;
 
-int main(int argc, char* argv[]) {
-  int algorithm = -1;
-  int error_code = 0;
-  uint8_t* buf = NULL;
-  uint8_t* signature_digest = NULL;
-  uint64_t len;
-  uint32_t signature_digest_len;
+	if (argc != 3) {
+		fprintf(stderr, "Usage: %s <alg_id> <file>", argv[0]);
+		goto cleanup;
+	}
 
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s <alg_id> <file>", argv[0]);
-    return -1;
-  }
-  algorithm = atoi(argv[1]);
-  if (algorithm < 0 || algorithm >= kNumAlgorithms) {
-    fprintf(stderr, "Invalid Algorithm!\n");
-    return -1;
-  }
+	int algorithm = atoi(argv[1]);
+	if (algorithm < 0 || algorithm >= VB2_ALG_COUNT) {
+		fprintf(stderr, "Invalid Algorithm!\n");
+		goto cleanup;
+	}
 
-  buf = BufferFromFile(argv[2], &len);
-  if (!buf) {
-    fprintf(stderr, "Could not read file: %s\n", argv[2]);
-    return -1;
-  }
+	if (VB2_SUCCESS != vb2_read_file(argv[2], &buf, &len)) {
+		fprintf(stderr, "Could not read file: %s\n", argv[2]);
+		goto cleanup;
+	}
 
-  signature_digest = SignatureDigest(buf, len, algorithm);
-  signature_digest_len = (hash_size_map[algorithm] +
-                          digestinfo_size_map[algorithm]);
-  if (!signature_digest)
-    error_code = -1;
-  if(signature_digest &&
-     1 != fwrite(signature_digest, signature_digest_len, 1, stdout))
-    error_code = -1;
-  free(signature_digest);
-  free(buf);
-  return error_code;
+	enum vb2_hash_algorithm hash_alg = vb2_crypto_to_hash(algorithm);
+	uint32_t digest_size = vb2_digest_size(hash_alg);
+	uint32_t digestinfo_size = 0;
+	const uint8_t *digestinfo = NULL;
+	if (VB2_SUCCESS != vb2_digest_info(hash_alg, &digestinfo,
+					   &digestinfo_size))
+		goto cleanup;
+
+	uint32_t signature_digest_len = digest_size + digestinfo_size;
+	signature_digest = SignatureDigest(buf, len, algorithm);
+	if (signature_digest &&
+	   fwrite(signature_digest, signature_digest_len, 1, stdout) == 1)
+		error_code = 0;
+
+cleanup:
+	free(signature_digest);
+	free(buf);
+	return error_code;
 }

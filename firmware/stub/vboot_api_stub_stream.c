@@ -1,4 +1,4 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -7,8 +7,7 @@
 
 #include <stdint.h>
 
-#define _STUB_IMPLEMENTATION_
-
+#include "2common.h"
 #include "vboot_api.h"
 
 /* The stub implementation assumes 512-byte disk sectors */
@@ -17,7 +16,7 @@
 /* Internal struct to simulate a stream for sector-based disks */
 struct disk_stream {
 	/* Disk handle */
-	VbExDiskHandle_t handle;
+	vb2ex_disk_handle_t handle;
 
 	/* Next sector to read */
 	uint64_t sector;
@@ -26,54 +25,59 @@ struct disk_stream {
 	uint64_t sectors_left;
 };
 
-VbError_t VbExStreamOpen(VbExDiskHandle_t handle, uint64_t lba_start,
-			 uint64_t lba_count, VbExStream_t *stream)
+__attribute__((weak))
+vb2_error_t VbExStreamOpen(vb2ex_disk_handle_t handle, uint64_t lba_start,
+			   uint64_t lba_count, VbExStream_t *stream)
 {
 	struct disk_stream *s;
 
 	if (!handle) {
 		*stream = NULL;
-		return VBERROR_UNKNOWN;
+		return VB2_ERROR_UNKNOWN;
 	}
 
-	s = VbExMalloc(sizeof(*s));
+	s = malloc(sizeof(*s));
+	if (!s)
+		return VB2_ERROR_UNKNOWN;
 	s->handle = handle;
 	s->sector = lba_start;
 	s->sectors_left = lba_count;
 
 	*stream = (void *)s;
 
-	return VBERROR_SUCCESS;
+	return VB2_SUCCESS;
 }
 
-VbError_t VbExStreamRead(VbExStream_t stream, uint32_t bytes, void *buffer)
+__attribute__((weak))
+vb2_error_t VbExStreamRead(VbExStream_t stream, uint32_t bytes, void *buffer)
 {
 	struct disk_stream *s = (struct disk_stream *)stream;
 	uint64_t sectors;
-	VbError_t rv;
+	vb2_error_t rv;
 
 	if (!s)
-		return VBERROR_UNKNOWN;
+		return VB2_ERROR_UNKNOWN;
 
 	/* For now, require reads to be a multiple of the LBA size */
 	if (bytes % LBA_BYTES)
-		return VBERROR_UNKNOWN;
+		return VB2_ERROR_UNKNOWN;
 
 	/* Fail on overflow */
 	sectors = bytes / LBA_BYTES;
 	if (sectors > s->sectors_left)
-		return VBERROR_UNKNOWN;
+		return VB2_ERROR_UNKNOWN;
 
 	rv = VbExDiskRead(s->handle, s->sector, sectors, buffer);
-	if (rv != VBERROR_SUCCESS)
+	if (rv != VB2_SUCCESS)
 		return rv;
 
 	s->sector += sectors;
 	s->sectors_left -= sectors;
 
-	return VBERROR_SUCCESS;
+	return VB2_SUCCESS;
 }
 
+__attribute__((weak))
 void VbExStreamClose(VbExStream_t stream)
 {
 	struct disk_stream *s = (struct disk_stream *)stream;
@@ -82,6 +86,6 @@ void VbExStreamClose(VbExStream_t stream)
 	if (!s)
 		return;
 
-	VbExFree(s);
+	free(s);
 	return;
 }
