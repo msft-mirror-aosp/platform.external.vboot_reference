@@ -1,8 +1,8 @@
-/* Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+/* Copyright 2011 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
- * Verified boot key block utility
+ * Verified boot keyblock utility
  */
 
 #include <getopt.h>
@@ -11,11 +11,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cryptolib.h"
+#include "2common.h"
+#include "2rsa.h"
+#include "2sysincludes.h"
 #include "futility.h"
 #include "host_common.h"
+#include "host_key21.h"
 #include "util_misc.h"
-#include "vboot_common.h"
+#include "vb1_helper.h"
 
 /* Command line options */
 enum {
@@ -28,6 +31,7 @@ enum {
 	OPT_PEM_ALGORITHM,
 	OPT_EXTERNAL_SIGNER,
 	OPT_FLAGS,
+	OPT_HELP,
 };
 
 static const struct option long_opts[] = {
@@ -40,6 +44,7 @@ static const struct option long_opts[] = {
 	{"pem_algorithm", 1, 0, OPT_PEM_ALGORITHM},
 	{"externalsigner", 1, 0, OPT_EXTERNAL_SIGNER},
 	{"flags", 1, 0, OPT_FLAGS},
+	{"help", 0, 0, OPT_HELP},
 	{NULL, 0, 0, 0}
 };
 
@@ -71,9 +76,9 @@ static const char usage[] =
 	"  --datapubkey <file>"
 	"        Write the data public key to this file.\n\n";
 
-static void print_help(const char *progname)
+static void print_help(int argc, char *argv[])
 {
-	printf(usage, progname);
+	printf(usage, argv[0]);
 }
 
 /* Pack a .keyblock */
@@ -82,68 +87,67 @@ static int Pack(const char *outfile, const char *datapubkey,
 		const char *signprivate_pem, uint64_t pem_algorithm,
 		uint64_t flags, const char *external_signer)
 {
-	VbPublicKey *data_key;
-	VbPrivateKey *signing_key = NULL;
-	VbKeyBlockHeader *block;
+	struct vb2_private_key *signing_key = NULL;
+	struct vb2_keyblock *block;
 
 	if (!outfile) {
-		fprintf(stderr,
-			"vbutil_keyblock: Must specify output filename.\n");
+		ERROR("vbutil_keyblock: Must specify output filename.\n");
 		return 1;
 	}
 	if (!datapubkey) {
-		fprintf(stderr,
-			"vbutil_keyblock: Must specify data public key.\n");
+		ERROR("vbutil_keyblock: Must specify data public key.\n");
 		return 1;
 	}
 
-	data_key = PublicKeyRead(datapubkey);
+	struct vb2_packed_key *data_key = vb2_read_packed_key(datapubkey);
 	if (!data_key) {
-		fprintf(stderr, "vbutil_keyblock: Error reading data key.\n");
+		ERROR("vbutil_keyblock: Error reading data key.\n");
 		return 1;
 	}
 
 	if (signprivate_pem) {
-		if (pem_algorithm >= kNumAlgorithms) {
-			fprintf(stderr,
-				"vbutil_keyblock: Invalid --pem_algorithm %"
+		if (pem_algorithm >= VB2_ALG_COUNT) {
+			ERROR("vbutil_keyblock: Invalid --pem_algorithm %"
 				PRIu64 "\n", pem_algorithm);
 			return 1;
 		}
 		if (external_signer) {
 			/* External signing uses the PEM file directly. */
-			block = KeyBlockCreate_external(data_key,
-							signprivate_pem,
-							pem_algorithm, flags,
-							external_signer);
+			block = vb2_create_keyblock_external(data_key,
+							     signprivate_pem,
+							     pem_algorithm,
+							     flags,
+							     external_signer);
 		} else {
 			signing_key =
-			    PrivateKeyReadPem(signprivate_pem, pem_algorithm);
+				vb2_read_private_key_pem(signprivate_pem,
+							 pem_algorithm);
 			if (!signing_key) {
-				fprintf(stderr, "vbutil_keyblock:"
+				ERROR("vbutil_keyblock:"
 					" Error reading signing key.\n");
 				return 1;
 			}
-			block = KeyBlockCreate(data_key, signing_key, flags);
+			block = vb2_create_keyblock(data_key, signing_key,
+						    flags);
 		}
 	} else {
 		if (signprivate) {
-			signing_key = PrivateKeyRead(signprivate);
+			signing_key = vb2_read_private_key(signprivate);
 			if (!signing_key) {
-				fprintf(stderr, "vbutil_keyblock:"
+				ERROR("vbutil_keyblock:"
 					" Error reading signing key.\n");
 				return 1;
 			}
 		}
-		block = KeyBlockCreate(data_key, signing_key, flags);
+		block = vb2_create_keyblock(data_key, signing_key, flags);
 	}
 
 	free(data_key);
 	if (signing_key)
 		free(signing_key);
 
-	if (0 != KeyBlockWrite(outfile, block)) {
-		fprintf(stderr, "vbutil_keyblock: Error writing key block.\n");
+	if (VB2_SUCCESS != vb2_write_keyblock(outfile, block)) {
+		ERROR("vbutil_keyblock: Error writing keyblock.\n");
 		return 1;
 	}
 	free(block);
@@ -153,67 +157,81 @@ static int Pack(const char *outfile, const char *datapubkey,
 static int Unpack(const char *infile, const char *datapubkey,
 		  const char *signpubkey)
 {
-	VbPublicKey *data_key;
-	VbPublicKey *sign_key = NULL;
-	VbKeyBlockHeader *block;
+	struct vb2_packed_key *sign_key = NULL;
 
 	if (!infile) {
-		fprintf(stderr, "vbutil_keyblock: Must specify filename\n");
+		ERROR("vbutil_keyblock: Must specify filename\n");
 		return 1;
 	}
 
-	block = KeyBlockRead(infile);
+	struct vb2_keyblock *block = vb2_read_keyblock(infile);
 	if (!block) {
-		fprintf(stderr, "vbutil_keyblock: Error reading key block.\n");
+		ERROR("vbutil_keyblock: Error reading keyblock.\n");
 		return 1;
 	}
 
-	/* If the block is signed, then verify it with the signing public key,
-	 * since KeyBlockRead() only verified the hash. */
-	if (block->key_block_signature.sig_size && signpubkey) {
-		sign_key = PublicKeyRead(signpubkey);
-		if (!sign_key) {
-			fprintf(stderr,
-				"vbutil_keyblock: Error reading signpubkey.\n");
+	/* If the signing public key is provided, then verify the block
+	 * signature, since vb2_read_keyblock() only verified the hash. */
+	if (signpubkey) {
+		static uint8_t workbuf[VB2_FIRMWARE_WORKBUF_RECOMMENDED_SIZE]
+			__attribute__((aligned(VB2_WORKBUF_ALIGN)));
+		static struct vb2_workbuf wb;
+
+		if (block->keyblock_signature.sig_size == 0) {
+			ERROR("vbutil_keyblock: signpubkey provided but keyblock is not signed.\n");
 			return 1;
 		}
-		if (0 !=
-		    KeyBlockVerify(block, block->key_block_size, sign_key, 0)) {
-			fprintf(stderr, "vbutil_keyblock:"
-				" Error verifying key block.\n");
+
+		vb2_workbuf_init(&wb, workbuf, sizeof(workbuf));
+
+		sign_key = vb2_read_packed_key(signpubkey);
+		if (!sign_key) {
+			ERROR("vbutil_keyblock: Error reading signpubkey.\n");
+			return 1;
+		}
+		struct vb2_public_key key;
+		if (VB2_SUCCESS != vb2_unpack_key(&key, sign_key)) {
+			ERROR("vbutil_keyblock: Error reading signpubkey.\n");
+			return 1;
+		}
+
+		if (VB2_SUCCESS !=
+		    vb2_verify_keyblock(block, block->keyblock_size,
+					&key, &wb)) {
+			ERROR("vbutil_keyblock: Error verifying keyblock.\n");
 			return 1;
 		}
 		free(sign_key);
 	}
 
-	printf("Key block file:       %s\n", infile);
+	printf("Keyblock file:        %s\n", infile);
 	printf("Signature             %s\n", sign_key ? "valid" : "ignored");
-	printf("Flags:                %" PRIu64 " ", block->key_block_flags);
-	if (block->key_block_flags & KEY_BLOCK_FLAG_DEVELOPER_0)
+	printf("Flags:                %u ", block->keyblock_flags);
+	if (block->keyblock_flags & VB2_KEYBLOCK_FLAG_DEVELOPER_0)
 		printf(" !DEV");
-	if (block->key_block_flags & KEY_BLOCK_FLAG_DEVELOPER_1)
+	if (block->keyblock_flags & VB2_KEYBLOCK_FLAG_DEVELOPER_1)
 		printf(" DEV");
-	if (block->key_block_flags & KEY_BLOCK_FLAG_RECOVERY_0)
+	if (block->keyblock_flags & VB2_KEYBLOCK_FLAG_RECOVERY_0)
 		printf(" !REC");
-	if (block->key_block_flags & KEY_BLOCK_FLAG_RECOVERY_1)
+	if (block->keyblock_flags & VB2_KEYBLOCK_FLAG_RECOVERY_1)
 		printf(" REC");
+	if (block->keyblock_flags & VB2_KEYBLOCK_FLAG_MINIOS_0)
+		printf(" !MINIOS");
+	if (block->keyblock_flags & VB2_KEYBLOCK_FLAG_MINIOS_1)
+		printf(" MINIOS");
 	printf("\n");
 
-	data_key = &block->data_key;
-	printf("Data key algorithm:   %" PRIu64 " %s\n", data_key->algorithm,
-	       (data_key->algorithm < kNumAlgorithms ?
-		algo_strings[data_key->algorithm] : "(invalid)"));
-	printf("Data key version:     %" PRIu64 "\n", data_key->key_version);
-	printf("Data key sha1sum:     ");
-	PrintPubKeySha1Sum(data_key);
-	printf("\n");
+	struct vb2_packed_key *data_key = &block->data_key;
+	printf("Data key algorithm:   %u %s\n", data_key->algorithm,
+	       vb2_get_crypto_algorithm_name(data_key->algorithm));
+	printf("Data key version:     %u\n", data_key->key_version);
+	printf("Data key sha1sum:     %s\n",
+	       packed_key_sha1_string(data_key));
 
-	if (datapubkey) {
-		if (0 != PublicKeyWrite(datapubkey, data_key)) {
-			fprintf(stderr, "vbutil_keyblock:"
-				" unable to write public key\n");
-			return 1;
-		}
+	if (datapubkey &&
+	    VB2_SUCCESS != vb2_write_packed_key(datapubkey, data_key)) {
+		ERROR("vbutil_keyblock: error writing public key\n");
+		return 1;
 	}
 
 	free(block);
@@ -244,6 +262,9 @@ static int do_vbutil_keyblock(int argc, char *argv[])
 			printf("Unknown option\n");
 			parse_error = 1;
 			break;
+		case OPT_HELP:
+			print_help(argc, argv);
+			return !!parse_error;
 
 		case OPT_MODE_PACK:
 		case OPT_MODE_UNPACK:
@@ -270,7 +291,7 @@ static int do_vbutil_keyblock(int argc, char *argv[])
 		case OPT_PEM_ALGORITHM:
 			pem_algorithm = strtoul(optarg, &e, 0);
 			if (!*optarg || (e && *e)) {
-				fprintf(stderr, "Invalid --pem_algorithm\n");
+				ERROR("Invalid --pem_algorithm\n");
 				parse_error = 1;
 			} else {
 				is_pem_algorithm = 1;
@@ -284,7 +305,7 @@ static int do_vbutil_keyblock(int argc, char *argv[])
 		case OPT_FLAGS:
 			flags = strtoul(optarg, &e, 0);
 			if (!*optarg || (e && *e)) {
-				fprintf(stderr, "Invalid --flags\n");
+				ERROR("Invalid --flags\n");
 				parse_error = 1;
 			}
 			break;
@@ -293,27 +314,24 @@ static int do_vbutil_keyblock(int argc, char *argv[])
 
 	/* Check if the right combination of options was provided. */
 	if (signprivate && signprivate_pem) {
-		fprintf(stderr,
-			"Only one of --signprivate or --signprivate_pem must"
+		ERROR("Only one of --signprivate or --signprivate_pem must"
 			" be specified\n");
 		parse_error = 1;
 	}
 
 	if (signprivate_pem && !is_pem_algorithm) {
-		fprintf(stderr, "--pem_algorithm must be used with"
+		ERROR("--pem_algorithm must be used with"
 			" --signprivate_pem\n");
 		parse_error = 1;
 	}
 
 	if (external_signer && !signprivate_pem) {
-		fprintf(stderr,
-			"--externalsigner must be used with --signprivate_pem"
-			"\n");
+		ERROR("--externalsigner must be used with --signprivate_pem\n");
 		parse_error = 1;
 	}
 
 	if (parse_error) {
-		print_help(argv[0]);
+		print_help(argc, argv);
 		return 1;
 	}
 
@@ -326,12 +344,10 @@ static int do_vbutil_keyblock(int argc, char *argv[])
 		return Unpack(filename, datapubkey, signpubkey);
 	default:
 		printf("Must specify a mode.\n");
-		print_help(argv[0]);
+		print_help(argc, argv);
 		return 1;
 	}
 }
 
-DECLARE_FUTIL_COMMAND(vbutil_keyblock, do_vbutil_keyblock,
-		      VBOOT_VERSION_1_0,
-		      "Creates, signs, and verifies a keyblock",
-		      print_help);
+DECLARE_FUTIL_COMMAND(vbutil_keyblock, do_vbutil_keyblock, VBOOT_VERSION_1_0,
+		      "Creates, signs, and verifies a keyblock");

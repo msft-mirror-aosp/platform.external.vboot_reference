@@ -1,12 +1,13 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
-#ifndef VBOOT_REFERENCE_UTILITY_CGPT_CGPT_H_
-#define VBOOT_REFERENCE_UTILITY_CGPT_CGPT_H_
+#ifndef VBOOT_REFERENCE_CGPT_H_
+#define VBOOT_REFERENCE_CGPT_H_
 
 #include <fcntl.h>
-#ifndef HAVE_MACOS
+#if !defined(HAVE_MACOS) && !defined(__FreeBSD__) && !defined(__OpenBSD__)
 #include <features.h>
 #endif
 #include <stdint.h>
@@ -64,18 +65,16 @@ int DriveClose(struct drive *drive, int update_as_needed);
 int CheckValid(const struct drive *drive);
 
 /* Loads sectors from 'drive'.
- * *buf is pointed to an allocated memory when returned, and should be
- * freed.
  *
  *   drive -- open drive.
- *   buf -- pointer to buffer pointer
+ *   buf -- pointer to buffer of at least (sector_bytes * sector_count) size
  *   sector -- offset of starting sector (in sectors)
  *   sector_bytes -- bytes per sector
  *   sector_count -- number of sectors to load
  *
  * Returns CGPT_OK for successful. Aborts if any error occurs.
  */
-int Load(struct drive *drive, uint8_t **buf,
+int Load(struct drive *drive, uint8_t *buf,
                 const uint64_t sector,
                 const uint64_t sector_bytes,
                 const uint64_t sector_count);
@@ -95,19 +94,6 @@ int Save(struct drive *drive, const uint8_t *buf,
                 const uint64_t sector_bytes,
                 const uint64_t sector_count);
 
-
-/* GUID conversion functions. Accepted format:
- *
- *   "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
- *
- * At least GUID_STRLEN bytes should be reserved in 'str' (included the tailing
- * '\0').
- */
-#define GUID_STRLEN 37
-int StrToGuid(const char *str, Guid *guid);
-void GuidToStr(const Guid *guid, char *str, unsigned int buflen);
-int GuidEqual(const Guid *guid1, const Guid *guid2);
-int IsZero(const Guid *guid);
 
 /* Constant global type values to compare against */
 extern const Guid guid_chromeos_firmware;
@@ -149,6 +135,12 @@ void EntryDetails(GptEntry *entry, uint32_t index, int raw);
 uint32_t GetNumberOfEntries(const struct drive *drive);
 GptEntry *GetEntry(GptData *gpt, int secondary, uint32_t entry_index);
 
+void SetRequired(struct drive *drive, int secondary, uint32_t entry_index,
+                 int required);
+int GetRequired(struct drive *drive, int secondary, uint32_t entry_index);
+void SetLegacyBoot(struct drive *drive, int secondary, uint32_t entry_index,
+                   int legacy_boot);
+int GetLegacyBoot(struct drive *drive, int secondary, uint32_t entry_index);
 void SetPriority(struct drive *drive, int secondary, uint32_t entry_index,
                  int priority);
 int GetPriority(struct drive *drive, int secondary, uint32_t entry_index);
@@ -158,6 +150,9 @@ int GetTries(struct drive *drive, int secondary, uint32_t entry_index);
 void SetSuccessful(struct drive *drive, int secondary, uint32_t entry_index,
                    int success);
 int GetSuccessful(struct drive *drive, int secondary, uint32_t entry_index);
+void SetErrorCounter(struct drive *drive, int secondary, uint32_t entry_index,
+                     int error_counter);
+int GetErrorCounter(struct drive *drive, int secondary, uint32_t entry_index);
 
 void SetRaw(struct drive *drive, int secondary, uint32_t entry_index,
            uint32_t raw);
@@ -187,12 +182,15 @@ void Error(const char *format, ...);
 void Warning(const char *format, ...);
 
 // Command functions.
+int check_int_parse(char option, const char *buf);
+int check_int_limit(char option, int val, int low, int high);
 int cmd_show(int argc, char *argv[]);
 int cmd_repair(int argc, char *argv[]);
 int cmd_create(int argc, char *argv[]);
 int cmd_add(int argc, char *argv[]);
 int cmd_boot(int argc, char *argv[]);
 int cmd_find(int argc, char *argv[]);
+int cmd_edit(int argc, char *argv[]);
 int cmd_prioritize(int argc, char *argv[]);
 int cmd_legacy(int argc, char *argv[]);
 
@@ -211,4 +209,4 @@ const char *GptError(int errnum);
     exit(1); } \
   } while (0)
 
-#endif  // VBOOT_REFERENCE_UTILITY_CGPT_CGPT_H_
+#endif  /* VBOOT_REFERENCE_CGPT_H_ */

@@ -1,24 +1,32 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
  * vboot-related functions exported for use by userspace programs
  */
 
-#ifndef VBOOT_HOST_H_
-#define VBOOT_HOST_H_
+#ifndef VBOOT_REFERENCE_VBOOT_HOST_H_
+#define VBOOT_REFERENCE_VBOOT_HOST_H_
+
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#include "2crypto.h"
+#include "cgpt_params.h"
 
 /****************************************************************************/
 /* EFI GPT manipulation */
 
-#include "cgpt_params.h"
+#ifdef __cplusplus
+extern "C" {
+#endif  /* __cplusplus */
 
 /* partition table manipulation */
 int CgptCreate(CgptCreateParams *params);
 int CgptAdd(CgptAddParams *params);
+int CgptEdit(CgptEditParams *params);
 int CgptSetAttributes(CgptAddParams *params);
 int CgptGetPartitionDetails(CgptAddParams *params);
 int CgptBoot(CgptBootParams *params);
@@ -55,7 +63,7 @@ int GuidIsZero(const Guid *guid);
 
 /* Returns a new copy of the kernel cmdline. The caller must free it. */
 char *FindKernelConfig(const char *filename,
-                       uint64_t kernel_body_load_address);
+		       uint64_t kernel_body_load_address);
 
 /****************************************************************************/
 /* Kernel partition */
@@ -67,5 +75,26 @@ char *FindKernelConfig(const char *filename,
 int ExtractVmlinuz(void *kpart_data, size_t kpart_size,
 		   void **vmlinuz_out, size_t *vmlinuz_size);
 
+/**
+ * Look up a signature algorithm by its string representation.
+ *
+ * @param str		String representation of algo (e.g. "rsa2048" or "1")
+ * @param alg		Output parameter that will be filled with found enum
+ * @return		True if algorithm was found, false otherwise.
+ */
+bool vb2_lookup_sig_alg(const char *str, enum vb2_signature_algorithm *sig_alg);
 
-#endif  /* VBOOT_HOST_H_ */
+/**
+ * Look up a hash algorithm by its string representation.
+ *
+ * @param str		String representation of algorithm (e.g. "sha1" or "1")
+ * @param alg		Output parameter that will be filled with found enum
+ * @return		True if algorithm was found, false otherwise.
+ */
+bool vb2_lookup_hash_alg(const char *str, enum vb2_hash_algorithm *hash_alg);
+
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
+
+#endif  /* VBOOT_REFERENCE_VBOOT_HOST_H_ */

@@ -1,12 +1,14 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
  * Non-volatile storage routines
  */
 
-#ifndef VBOOT_REFERENCE_VBOOT_2NVSTORAGE_H_
-#define VBOOT_REFERENCE_VBOOT_2NVSTORAGE_H_
+#ifndef VBOOT_REFERENCE_2NVSTORAGE_H_
+#define VBOOT_REFERENCE_2NVSTORAGE_H_
+
+struct vb2_context;
 
 enum vb2_nv_param {
 	/*
@@ -42,30 +44,38 @@ enum vb2_nv_param {
 	 * 8-bit value.
 	 */
 	VB2_NV_LOCALIZATION_INDEX,
-	/* Field reserved for kernel/user-mode use; 32-bit value. */
+	/* Field reserved for kernel/user-mode use; 16-bit value. */
 	VB2_NV_KERNEL_FIELD,
-	/* Allow booting from USB in developer mode.  0=no, 1=yes. */
-	VB2_NV_DEV_BOOT_USB,
+	/* Allow booting from external disk in developer mode.  0=no, 1=yes. */
+	VB2_NV_DEV_BOOT_EXTERNAL,
 	/* Allow booting of legacy OSes in developer mode.  0=no, 1=yes. */
-	VB2_NV_DEV_BOOT_LEGACY,
+	VB2_NV_DEV_BOOT_ALTFW,
 	/* Only boot Google-signed images in developer mode.  0=no, 1=yes. */
 	VB2_NV_DEV_BOOT_SIGNED_ONLY,
+	/*
+	 * Allow full fastboot capability in firmware in developer mode.
+	 * 0=no, 1=yes.  Deprecated; see chromium:995172.
+	 */
+	VB2_NV_DEPRECATED_DEV_BOOT_FASTBOOT_FULL_CAP,
+	/* Set default boot mode (see vb2_dev_default_boot_target) */
+	VB2_NV_DEV_DEFAULT_BOOT,
+	/* Enable USB Device Controller */
+	VB2_NV_DEV_ENABLE_UDC,
 	/*
 	 * Set by userspace to request that RO firmware disable dev-mode on the
 	 * next boot. This is likely only possible if the dev-switch is
 	 * virtual.
 	 */
 	VB2_NV_DISABLE_DEV_REQUEST,
-	/*
-	 * Set and cleared by vboot to request that the video Option ROM be
-	 * loaded at boot time, so that BIOS screens can be displayed. 0=no,
-	 * 1=yes.
-	 */
-	VB2_NV_OPROM_NEEDED,
+	/* Set and cleared by vboot to request that display be initialized
+	   at boot time, so that BIOS screens can be displayed. 0=no, 1=yes. */
+	VB2_NV_DISPLAY_REQUEST,
 	/* Request that the firmware clear the TPM owner on the next boot. */
 	VB2_NV_CLEAR_TPM_OWNER_REQUEST,
 	/* Flag that TPM owner was cleared on request. */
 	VB2_NV_CLEAR_TPM_OWNER_DONE,
+	/* TPM requested a reboot already. */
+	VB2_NV_TPM_REQUESTED_REBOOT,
 	/* More details on recovery reason */
 	VB2_NV_RECOVERY_SUBCODE,
 	/* Request that NVRAM be backed up at next boot if possible. */
@@ -78,22 +88,64 @@ enum vb2_nv_param {
 	VB2_NV_FW_PREV_TRIED,
 	/* Result of trying that firmware (see vb2_fw_result) */
 	VB2_NV_FW_PREV_RESULT,
+	/* Request wipeout of the device by the app. */
+	VB2_NV_REQ_WIPEOUT,
+
+	/* Fastboot: Unlock in firmware, 0=disabled, 1=enabled.
+	   Deprecated; see chromium:995172. */
+	VB2_NV_DEPRECATED_FASTBOOT_UNLOCK_IN_FW,
+	/* Boot system when AC detected (0=no, 1=yes). */
+	VB2_NV_BOOT_ON_AC_DETECT,
+	/*
+	 * Try to update the EC-RO image after updating the EC-RW image
+	 * (0=no, 1=yes).
+	 */
+	VB2_NV_TRY_RO_SYNC,
+	/* Cut off battery and shutdown on next boot. */
+	VB2_NV_BATTERY_CUTOFF_REQUEST,
+	/* Maximum kernel version to roll forward to */
+	VB2_NV_KERNEL_MAX_ROLLFORWARD,
+
+	/*** Fields only available in NV storage V2 ***/
+
+	/*
+	 * Maximum firmware version to roll forward to.  Returns
+	 * VB2_MAX_ROLLFORWARD_MAX_V1_DEFAULT for V1.
+	 */
+	VB2_NV_FW_MAX_ROLLFORWARD,
+	/* Deprecated: Enable AltOS Mode on next boot. */
+	VB2_NV_DEPRECATED_ENABLE_ALT_OS_REQUEST,
+	/* Deprecated: Disable AltOS Mode on next boot. */
+	VB2_NV_DEPRECATED_DISABLE_ALT_OS_REQUEST,
+	/*
+	 * Add a short delay after EC software sync for any interaction
+	 * with EC-RW (persistent).  Formerly used for programmatically
+	 * testing Alt OS booting.
+	 */
+	VB2_NV_POST_EC_SYNC_DELAY,
+	/* Request booting of diagnostic rom.  0=no, 1=yes. */
+	VB2_NV_DIAG_REQUEST,
+	/* Priority of miniOS partition to load: 0=MINIOS-A, 1=MINIOS-B. */
+	VB2_NV_MINIOS_PRIORITY,
 };
 
-/* Firmware result codes for VB2_NV_FW_RESULT and VB2_NV_FW_PREV_RESULT */
-enum vb2_fw_result {
-	/* Unknown */
-	VB2_FW_RESULT_UNKNOWN = 0,
+/*
+ * Default value for VB2_NV_FIRMWARE_MAX_ROLLFORWARD on V1.  This preserves the
+ * existing behavior that V1 systems will always roll forward the firmware
+ * version when possible.
+ */
+#define VB2_FW_MAX_ROLLFORWARD_V1_DEFAULT 0xfffffffe
 
-	/* Trying a new slot, but haven't reached success/failure */
-	VB2_FW_RESULT_TRYING = 1,
-
-	/* Successfully booted to the OS */
-	VB2_FW_RESULT_SUCCESS = 2,
-
-	/* Known failure */
-	VB2_FW_RESULT_FAILURE = 3,
-};
+/**
+ * Return the size of the non-volatile storage data in the context.
+ *
+ * This may be called before vb2_context_init(), but you must set
+ * VB2_CONTEXT_NVDATA_V2 if you support V2 record size.
+ *
+ * @param ctx		Context pointer
+ * @return Size of the non-volatile storage data in bytes.
+ */
+int vb2_nv_get_size(const struct vb2_context *ctx);
 
 /**
  * Check the CRC of the non-volatile storage context.
@@ -106,10 +158,20 @@ enum vb2_fw_result {
  * @param ctx		Context pointer
  * @return VB2_SUCCESS, or non-zero error code if error.
  */
-int vb2_nv_check_crc(const struct vb2_context *ctx);
+vb2_error_t vb2_nv_check_crc(const struct vb2_context *ctx);
 
 /**
  * Initialize the non-volatile storage context and verify its CRC.
+ *
+ * This may be called before vb2_context_init(), as long as:
+ *
+ *    1) The ctx structure has been cleared to 0.
+ *    2) Existing non-volatile data, if any, has been stored to ctx->nvdata[].
+ *
+ * This is to support using the non-volatile storage functions to request
+ * recovery if there is an error allocating the workbuf for the context.  It
+ * also allows host-side code to use this library without setting up a bunch of
+ * extra context.
  *
  * @param ctx		Context pointer
  */
@@ -117,6 +179,8 @@ void vb2_nv_init(struct vb2_context *ctx);
 
 /**
  * Read a non-volatile value.
+ *
+ * Valid only after calling vb2_nv_init().
  *
  * @param ctx		Context pointer
  * @param param		Parameter to read
@@ -128,7 +192,9 @@ uint32_t vb2_nv_get(struct vb2_context *ctx, enum vb2_nv_param param);
 /**
  * Write a non-volatile value.
  *
- * Ignores writes to unknown params.
+ * Ignores writes to unknown params.  Valid only after calling vb2_nv_init().
+ * If this changes ctx->nvdata[], it will set VB2_CONTEXT_NVDATA_CHANGED in
+ * ctx->flags.
  *
  * @param ctx		Context pointer
  * @param param		Parameter to write
@@ -138,4 +204,4 @@ void vb2_nv_set(struct vb2_context *ctx,
 		enum vb2_nv_param param,
 		uint32_t value);
 
-#endif  /* VBOOT_REFERENCE_VBOOT_2NVSTORAGE_H_ */
+#endif  /* VBOOT_REFERENCE_2NVSTORAGE_H_ */

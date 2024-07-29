@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -34,12 +34,13 @@ struct {
   {"repair", cmd_repair, "Repair damaged GPT headers and tables"},
   {"boot", cmd_boot, "Edit the PMBR sector for legacy BIOSes"},
   {"find", cmd_find, "Locate a partition by its GUID"},
+  {"edit", cmd_edit, "Edit a drive entry"},
   {"prioritize", cmd_prioritize,
    "Reorder the priority of all kernel partitions"},
   {"legacy", cmd_legacy, "Switch between GPT and Legacy GPT"},
 };
 
-void Usage(void) {
+static void Usage(void) {
   int i;
 
   printf("\nUsage: %s COMMAND [OPTIONS] DRIVE\n\n"

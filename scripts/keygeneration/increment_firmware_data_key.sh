@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 # Used when revving versions for a firmware update.
 
 # Load common constants and variables.
+# shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
 
 # Abort on errors.

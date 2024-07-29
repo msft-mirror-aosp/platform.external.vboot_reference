@@ -1,34 +1,19 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-
 #include <stdint.h>
 #include <stdio.h>
 
-#define _STUB_IMPLEMENTATION_
-
-#include "cryptolib.h"
-#include "file_keys.h"
-#include "rsa_padding_test.h"
-#include "test_common.h"
-#include "utility.h"
-#include "vboot_api.h"
-
 #include "2common.h"
 #include "2rsa.h"
-
-/*
- * Internal functions from 2rsa.c that have error conditions we can't trigger
- * from the public APIs.  These include checks for bad algorithms where the
- * next call level up already checks for bad algorithms, etc.
- *
- * These functions aren't in 2rsa.h because they're not part of the public
- * APIs.
- */
-int vb2_mont_ge(const struct vb2_public_key *key, uint32_t *a);
-int vb2_check_padding(const uint8_t *sig, const struct vb2_public_key *key);
+#include "2rsa_private.h"
+#include "2sysincludes.h"
+#include "common/tests.h"
+#include "file_keys.h"
+#include "rsa_padding_test.h"
+#include "vboot_api.h"
 
 /**
  * Test RSA utility funcs
@@ -40,7 +25,7 @@ static void test_utils(void)
 				      .hash_alg = VB2_HASH_INVALID};
 
 	/* Verify old and new algorithm count constants match */
-	TEST_EQ(kNumAlgorithms, VB2_ALG_COUNT, "Algorithm counts");
+	TEST_EQ(VB2_ALG_COUNT, VB2_ALG_COUNT, "Algorithm counts");
 
 	/* Crypto algorithm to sig algorithm mapping */
 	TEST_EQ(vb2_crypto_to_signature(VB2_ALG_RSA1024_SHA1),
@@ -63,6 +48,10 @@ static void test_utils(void)
 		"Sig size RSA4096");
 	TEST_EQ(vb2_rsa_sig_size(VB2_SIG_RSA8192), RSA8192NUMBYTES,
 		"Sig size RSA8192");
+	TEST_EQ(vb2_rsa_sig_size(VB2_SIG_RSA2048_EXP3), RSA2048NUMBYTES,
+		"Sig size RSA2048_EXP3");
+	TEST_EQ(vb2_rsa_sig_size(VB2_SIG_RSA3072_EXP3), RSA3072NUMBYTES,
+		"Sig size RSA3072_EXP3");
 	TEST_EQ(vb2_rsa_sig_size(VB2_SIG_INVALID), 0,
 		"Sig size invalid algorithm");
 	TEST_EQ(vb2_rsa_sig_size(VB2_SIG_NONE), 0,
@@ -81,13 +70,19 @@ static void test_utils(void)
 	TEST_EQ(vb2_packed_key_size(VB2_SIG_RSA8192),
 		RSA8192NUMBYTES * 2 + sizeof(uint32_t) * 2,
 		"Packed key size VB2_SIG_RSA8192");
+	TEST_EQ(vb2_packed_key_size(VB2_SIG_RSA2048_EXP3),
+		RSA2048NUMBYTES * 2 + sizeof(uint32_t) * 2,
+		"Packed key size VB2_SIG_RSA2048_EXP3");
+	TEST_EQ(vb2_packed_key_size(VB2_SIG_RSA3072_EXP3),
+		RSA3072NUMBYTES * 2 + sizeof(uint32_t) * 2,
+		"Packed key size VB2_SIG_RSA3072_EXP3");
 	TEST_EQ(vb2_packed_key_size(VB2_SIG_INVALID), 0,
 		"Packed key size invalid algorithm");
 	TEST_EQ(vb2_packed_key_size(VB2_SIG_NONE), 0,
 		"Packed key size no signing algorithm");
 
 	/* Test padding check with bad algorithm */
-	Memcpy(sig, signatures[0], sizeof(sig));
+	memcpy(sig, signatures[0], sizeof(sig));
 	TEST_EQ(vb2_check_padding(sig, &kbad),
 		VB2_ERROR_RSA_PADDING_SIZE,
 		"vb2_check_padding() bad padding algorithm/size");

@@ -1,4 +1,4 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -6,7 +6,7 @@
 #ifndef VBOOT_REFERENCE_CGPTLIB_INTERNAL_H_
 #define VBOOT_REFERENCE_CGPTLIB_INTERNAL_H_
 
-#include "sysincludes.h"
+#include "2sysincludes.h"
 #include "cgptlib.h"
 #include "gpt.h"
 
@@ -22,28 +22,40 @@
  *
  *  63-61  -- (reserved)
  *     60  -- read-only
- *  59-57  -- (reserved)
+ *  59-58  -- (reserved)
+ *     57  -- error counter
  *     56  -- success
  *  55-52  -- tries
  *  51-48  -- priority
- *   47-2  -- UEFI: reserved for future use
+ *   47-3  -- UEFI: reserved for future use
+ *      2  -- UEFI: Legacy BIOS bootable
  *      1  -- UEFI: partition is not mapped
  *      0  -- UEFI: partition is required
  */
+#define CGPT_ATTRIBUTE_ERROR_COUNTER_OFFSET (57 - 48)
+#define CGPT_ATTRIBUTE_MAX_ERROR_COUNTER (1ULL)
+#define CGPT_ATTRIBUTE_ERROR_COUNTER_MASK (CGPT_ATTRIBUTE_MAX_ERROR_COUNTER << \
+					   CGPT_ATTRIBUTE_ERROR_COUNTER_OFFSET)
+
 #define CGPT_ATTRIBUTE_SUCCESSFUL_OFFSET (56 - 48)
 #define CGPT_ATTRIBUTE_MAX_SUCCESSFUL (1ULL)
 #define CGPT_ATTRIBUTE_SUCCESSFUL_MASK (CGPT_ATTRIBUTE_MAX_SUCCESSFUL << \
-                                     CGPT_ATTRIBUTE_SUCCESSFUL_OFFSET)
+					CGPT_ATTRIBUTE_SUCCESSFUL_OFFSET)
 
 #define CGPT_ATTRIBUTE_TRIES_OFFSET (52 - 48)
 #define CGPT_ATTRIBUTE_MAX_TRIES (15ULL)
 #define CGPT_ATTRIBUTE_TRIES_MASK (CGPT_ATTRIBUTE_MAX_TRIES << \
-                                   CGPT_ATTRIBUTE_TRIES_OFFSET)
+				   CGPT_ATTRIBUTE_TRIES_OFFSET)
 
 #define CGPT_ATTRIBUTE_PRIORITY_OFFSET (48 - 48)
 #define CGPT_ATTRIBUTE_MAX_PRIORITY (15ULL)
 #define CGPT_ATTRIBUTE_PRIORITY_MASK (CGPT_ATTRIBUTE_MAX_PRIORITY << \
-                                      CGPT_ATTRIBUTE_PRIORITY_OFFSET)
+				      CGPT_ATTRIBUTE_PRIORITY_OFFSET)
+
+#define CGPT_ATTRIBUTE_REQUIRED_OFFSET (0)
+#define CGPT_ATTRIBUTE_MAX_REQUIRED (1ULL)
+#define CGPT_ATTRIBUTE_LEGACY_BOOT_OFFSET (2)
+#define CGPT_ATTRIBUTE_MAX_LEGACY_BOOT (1ULL)
 
 /* Defines ChromeOS-specific limitation on GPT */
 #define MIN_SIZE_OF_HEADER 92
@@ -53,6 +65,9 @@
 #define SIZE_OF_ENTRY_MULTIPLE 8
 #define MIN_NUMBER_OF_ENTRIES 16
 #define MAX_NUMBER_OF_ENTRIES 128
+
+/* All GptData.(primary|secondary)_entries must be allocated to this size! */
+#define GPT_ENTRIES_ALLOC_SIZE (MAX_NUMBER_OF_ENTRIES * sizeof(GptEntry))
 
 /* Defines GPT sizes */
 #define GPT_PMBR_SECTORS 1  /* size (in sectors) of PMBR */
@@ -76,7 +91,7 @@ enum {
 };
 
 /**
- * Verify GptData parameters are sane.
+ * Verify GptData parameters are valid.
  */
 int CheckParameters(GptData* gpt);
 
@@ -86,8 +101,9 @@ int CheckParameters(GptData* gpt);
  * Returns 0 if header is valid, 1 if invalid.
  */
 int CheckHeader(GptHeader *h, int is_secondary,
-                uint64_t streaming_drive_sectors,
-                uint64_t gpt_drive_sectors, uint32_t flags);
+		uint64_t streaming_drive_sectors,
+		uint64_t gpt_drive_sectors, uint32_t flags,
+		uint32_t sector_bytes);
 
 /**
  * Calculate and return the header CRC.
@@ -119,12 +135,16 @@ int HeaderFieldsSame(GptHeader *h1, GptHeader *h2);
  *
  * On error, returns a GPT_ERROR_* return code.
  */
-int GptSanityCheck(GptData *gpt);
+int GptValidityCheck(GptData *gpt);
 
 /**
  * Repair GPT data by copying from one set of valid headers/entries to the
- * other.  Assumes GptSanityCheck() has been run to determine which headers
+ * other.  Assumes GptValidityCheck() has been run to determine which headers
  * and/or entries are already valid.
+ *
+ * The caller must make sure that even if one of the entries table is invalid
+ * then corresponding buffer is allocated and big enough to accommodate entries
+ * from the other (good) table.
  */
 void GptRepair(GptData *gpt);
 
@@ -133,15 +153,6 @@ void GptRepair(GptData *gpt);
  * recalculated and propagated to the secondary entries
  */
 void GptModified(GptData *gpt);
-
-/* Getters and setters for partition attribute fields. */
-
-int GetEntrySuccessful(const GptEntry *e);
-int GetEntryPriority(const GptEntry *e);
-int GetEntryTries(const GptEntry *e);
-void SetEntrySuccessful(GptEntry *e, int successful);
-void SetEntryPriority(GptEntry *e, int priority);
-void SetEntryTries(GptEntry *e, int tries);
 
 /**
  * Return 1 if the entry is a Chrome OS kernel partition, else 0.
@@ -159,8 +170,9 @@ void GetCurrentKernelUniqueGuid(GptData *gpt, void *dest);
 const char *GptErrorText(int error_code);
 
 /**
- * Return number of 512-byte sectors required to store the entries table.
+ * Return number of sectors required to store the entries table. Where
+ * a sector has size sector_bytes.
  */
-size_t CalculateEntriesSectors(GptHeader* h);
+size_t CalculateEntriesSectors(GptHeader* h, uint32_t sector_bytes);
 
-#endif /* VBOOT_REFERENCE_CGPTLIB_INTERNAL_H_ */
+#endif  /* VBOOT_REFERENCE_CGPTLIB_INTERNAL_H_ */

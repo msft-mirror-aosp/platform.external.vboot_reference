@@ -1,29 +1,29 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-#include "sysincludes.h"
-
+#include "2sysincludes.h"
 #include "cgptlib.h"
 #include "cgptlib_internal.h"
 #include "crc32.h"
 #include "gpt.h"
 #include "gpt_misc.h"
-#include "utility.h"
 
-const static int SECTOR_SIZE = 512;
+static const int MIN_SECTOR_SIZE = 512;
 
-size_t CalculateEntriesSectors(GptHeader* h) {
-  size_t bytes = h->number_of_entries * h->size_of_entry;
-  size_t ret = (bytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
-  return ret;
+size_t CalculateEntriesSectors(GptHeader* h, uint32_t sector_bytes)
+{
+	size_t bytes = h->number_of_entries * h->size_of_entry;
+	size_t ret = (bytes + sector_bytes - 1) / sector_bytes;
+	return ret;
 }
 
 int CheckParameters(GptData *gpt)
 {
-	/* Currently, we only support 512-byte sectors. */
-	if (gpt->sector_bytes != SECTOR_SIZE)
+	/* Only support 512-byte or larger sectors that are a power of 2 */
+	if (gpt->sector_bytes < MIN_SECTOR_SIZE ||
+			(gpt->sector_bytes  & (gpt->sector_bytes  - 1)) != 0)
 		return GPT_ERROR_INVALID_SECTOR_SIZE;
 
 	/*
@@ -44,7 +44,7 @@ int CheckParameters(GptData *gpt)
 	 */
 	if (gpt->gpt_drive_sectors <
 		(1 + 2 * (1 + MIN_NUMBER_OF_ENTRIES /
-				(SECTOR_SIZE / sizeof(GptEntry)))))
+				(gpt->sector_bytes / sizeof(GptEntry)))))
 		return GPT_ERROR_INVALID_SECTOR_NUMBER;
 
 	return GPT_SUCCESS;
@@ -65,7 +65,8 @@ uint32_t HeaderCrc(GptHeader *h)
 
 int CheckHeader(GptHeader *h, int is_secondary,
 		uint64_t streaming_drive_sectors,
-		uint64_t gpt_drive_sectors, uint32_t flags)
+		uint64_t gpt_drive_sectors, uint32_t flags,
+		uint32_t sector_bytes)
 {
 	if (!h)
 		return 1;
@@ -74,9 +75,9 @@ int CheckHeader(GptHeader *h, int is_secondary,
 	 * Make sure we're looking at a header of reasonable size before
 	 * attempting to calculate CRC.
 	 */
-	if (Memcmp(h->signature, GPT_HEADER_SIGNATURE,
+	if (memcmp(h->signature, GPT_HEADER_SIGNATURE,
 		   GPT_HEADER_SIGNATURE_SIZE) &&
-	    Memcmp(h->signature, GPT_HEADER_SIGNATURE2,
+	    memcmp(h->signature, GPT_HEADER_SIGNATURE2,
 		   GPT_HEADER_SIGNATURE_SIZE))
 		return 1;
 	if (h->revision != GPT_HEADER_REVISION)
@@ -114,7 +115,8 @@ int CheckHeader(GptHeader *h, int is_secondary,
 	if (is_secondary) {
 		if (h->my_lba != gpt_drive_sectors - GPT_HEADER_SECTORS)
 			return 1;
-		if (h->entries_lba != h->my_lba - CalculateEntriesSectors(h))
+		if (h->entries_lba != h->my_lba - CalculateEntriesSectors(h,
+								sector_bytes))
 			return 1;
 	} else {
 		if (h->my_lba != GPT_PMBR_SECTORS)
@@ -140,10 +142,11 @@ int CheckHeader(GptHeader *h, int is_secondary,
 	 * array.
 	 */
 	/* TODO(namnguyen): Also check for padding between header & entries. */
-	if (h->first_usable_lba < 2 + CalculateEntriesSectors(h))
+	if (h->first_usable_lba < 2 + CalculateEntriesSectors(h, sector_bytes))
 		return 1;
 	if (h->last_usable_lba >=
-			streaming_drive_sectors - 1 - CalculateEntriesSectors(h))
+			streaming_drive_sectors - 1 - CalculateEntriesSectors(h,
+								sector_bytes))
 		return 1;
 
 	/* Success */
@@ -153,7 +156,7 @@ int CheckHeader(GptHeader *h, int is_secondary,
 int IsKernelEntry(const GptEntry *e)
 {
 	static Guid chromeos_kernel = GPT_ENT_TYPE_CHROMEOS_KERNEL;
-	return !Memcmp(&e->type, &chromeos_kernel, sizeof(Guid));
+	return !memcmp(&e->type, &chromeos_kernel, sizeof(Guid));
 }
 
 int CheckEntries(GptEntry *entries, GptHeader *h)
@@ -198,7 +201,7 @@ int CheckEntries(GptEntry *entries, GptHeader *h)
 				return GPT_ERROR_END_LBA_OVERLAP;
 
 			/* UniqueGuid field must be unique. */
-			if (0 == Memcmp(&entry->unique, &e2->unique,
+			if (0 == memcmp(&entry->unique, &e2->unique,
 					sizeof(Guid)))
 				return GPT_ERROR_DUP_GUID;
 		}
@@ -210,7 +213,7 @@ int CheckEntries(GptEntry *entries, GptHeader *h)
 
 int HeaderFieldsSame(GptHeader *h1, GptHeader *h2)
 {
-	if (Memcmp(h1->signature, h2->signature, sizeof(h1->signature)))
+	if (memcmp(h1->signature, h2->signature, sizeof(h1->signature)))
 		return 1;
 	if (h1->revision != h2->revision)
 		return 1;
@@ -222,7 +225,7 @@ int HeaderFieldsSame(GptHeader *h1, GptHeader *h2)
 		return 1;
 	if (h1->last_usable_lba != h2->last_usable_lba)
 		return 1;
-	if (Memcmp(&h1->disk_uuid, &h2->disk_uuid, sizeof(Guid)))
+	if (memcmp(&h1->disk_uuid, &h2->disk_uuid, sizeof(Guid)))
 		return 1;
 	if (h1->number_of_entries != h2->number_of_entries)
 		return 1;
@@ -234,7 +237,7 @@ int HeaderFieldsSame(GptHeader *h1, GptHeader *h2)
 	return 0;
 }
 
-int GptSanityCheck(GptData *gpt)
+int GptValidityCheck(GptData *gpt)
 {
 	int retval;
 	GptHeader *header1 = (GptHeader *)(gpt->primary_header);
@@ -245,6 +248,7 @@ int GptSanityCheck(GptData *gpt)
 
 	gpt->valid_headers = 0;
 	gpt->valid_entries = 0;
+	gpt->ignored = 0;
 
 	retval = CheckParameters(gpt);
 	if (retval != GPT_SUCCESS)
@@ -252,31 +256,32 @@ int GptSanityCheck(GptData *gpt)
 
 	/* Check both headers; we need at least one valid header. */
 	if (0 == CheckHeader(header1, 0, gpt->streaming_drive_sectors,
-			     gpt->gpt_drive_sectors, gpt->flags)) {
+			     gpt->gpt_drive_sectors, gpt->flags,
+			     gpt->sector_bytes)) {
 		gpt->valid_headers |= MASK_PRIMARY;
 		goodhdr = header1;
+		if (0 == CheckEntries(entries1, goodhdr))
+			gpt->valid_entries |= MASK_PRIMARY;
+	} else if (header1 && !memcmp(header1->signature,
+		   GPT_HEADER_SIGNATURE_IGNORED, GPT_HEADER_SIGNATURE_SIZE)) {
+		gpt->ignored |= MASK_PRIMARY;
 	}
 	if (0 == CheckHeader(header2, 1, gpt->streaming_drive_sectors,
-			     gpt->gpt_drive_sectors, gpt->flags)) {
+			     gpt->gpt_drive_sectors, gpt->flags,
+			     gpt->sector_bytes)) {
 		gpt->valid_headers |= MASK_SECONDARY;
 		if (!goodhdr)
 			goodhdr = header2;
+		/* Check header1+entries2 if it was good, to catch mismatch. */
+		if (0 == CheckEntries(entries2, goodhdr))
+			gpt->valid_entries |= MASK_SECONDARY;
+	} else if (header2 && !memcmp(header2->signature,
+		   GPT_HEADER_SIGNATURE_IGNORED, GPT_HEADER_SIGNATURE_SIZE)) {
+		gpt->ignored |= MASK_SECONDARY;
 	}
 
 	if (!gpt->valid_headers)
 		return GPT_ERROR_INVALID_HEADERS;
-
-	/*
-	 * Check if entries are valid.
-	 *
-	 * Note that we use the same header in both checks.  This way we'll
-	 * catch the case where (header1,entries1) and (header2,entries2) are
-	 * both valid, but (entries1 != entries2).
-	 */
-	if (0 == CheckEntries(entries1, goodhdr))
-		gpt->valid_entries |= MASK_PRIMARY;
-	if (0 == CheckEntries(entries2, goodhdr))
-		gpt->valid_entries |= MASK_SECONDARY;
 
 	/*
 	 * If both headers are good but neither entries were good, check the
@@ -309,6 +314,15 @@ int GptSanityCheck(GptData *gpt)
 	    0 != HeaderFieldsSame(header1, header2))
 		gpt->valid_headers &= ~MASK_SECONDARY;
 
+	/*
+	 * When we're ignoring a GPT, make it look in memory like the other one
+	 * and pretend that everything is fine (until we try to save).
+	 */
+	if (MASK_NONE != gpt->ignored) {
+		GptRepair(gpt);
+		gpt->modified = 0;
+	}
+
 	return GPT_SUCCESS;
 }
 
@@ -327,16 +341,17 @@ void GptRepair(GptData *gpt)
 	/* Repair headers if necessary */
 	if (MASK_PRIMARY == gpt->valid_headers) {
 		/* Primary is good, secondary is bad */
-		Memcpy(header2, header1, sizeof(GptHeader));
+		memcpy(header2, header1, sizeof(GptHeader));
 		header2->my_lba = gpt->gpt_drive_sectors - GPT_HEADER_SECTORS;
 		header2->alternate_lba = GPT_PMBR_SECTORS;  /* Second sector. */
-		header2->entries_lba = header2->my_lba - CalculateEntriesSectors(header1);
+		header2->entries_lba = header2->my_lba -
+			CalculateEntriesSectors(header1, gpt->sector_bytes);
 		header2->header_crc32 = HeaderCrc(header2);
 		gpt->modified |= GPT_MODIFIED_HEADER2;
 	}
 	else if (MASK_SECONDARY == gpt->valid_headers) {
 		/* Secondary is good, primary is bad */
-		Memcpy(header1, header2, sizeof(GptHeader));
+		memcpy(header1, header2, sizeof(GptHeader));
 		header1->my_lba = GPT_PMBR_SECTORS;  /* Second sector. */
 		header1->alternate_lba =
 			gpt->streaming_drive_sectors - GPT_HEADER_SECTORS;
@@ -351,15 +366,25 @@ void GptRepair(GptData *gpt)
 	entries_size = header1->size_of_entry * header1->number_of_entries;
 	if (MASK_PRIMARY == gpt->valid_entries) {
 		/* Primary is good, secondary is bad */
-		Memcpy(entries2, entries1, entries_size);
+		memcpy(entries2, entries1, entries_size);
 		gpt->modified |= GPT_MODIFIED_ENTRIES2;
 	}
 	else if (MASK_SECONDARY == gpt->valid_entries) {
 		/* Secondary is good, primary is bad */
-		Memcpy(entries1, entries2, entries_size);
+		memcpy(entries1, entries2, entries_size);
 		gpt->modified |= GPT_MODIFIED_ENTRIES1;
 	}
 	gpt->valid_entries = MASK_BOTH;
+}
+
+int GetEntryRequired(const GptEntry *e)
+{
+	return e->attrs.fields.required;
+}
+
+int GetEntryLegacyBoot(const GptEntry *e)
+{
+	return e->attrs.fields.legacy_boot;
 }
 
 int GetEntrySuccessful(const GptEntry *e)
@@ -378,6 +403,22 @@ int GetEntryTries(const GptEntry *e)
 {
 	return (e->attrs.fields.gpt_att & CGPT_ATTRIBUTE_TRIES_MASK) >>
 		CGPT_ATTRIBUTE_TRIES_OFFSET;
+}
+
+int GetEntryErrorCounter(const GptEntry *e)
+{
+	return (e->attrs.fields.gpt_att & CGPT_ATTRIBUTE_ERROR_COUNTER_MASK) >>
+		CGPT_ATTRIBUTE_ERROR_COUNTER_OFFSET;
+}
+
+void SetEntryRequired(GptEntry *e, int required)
+{
+	e->attrs.fields.required = required;
+}
+
+void SetEntryLegacyBoot(GptEntry *e, int legacy_boot)
+{
+	e->attrs.fields.legacy_boot = legacy_boot;
 }
 
 void SetEntrySuccessful(GptEntry *e, int successful)
@@ -403,11 +444,19 @@ void SetEntryTries(GptEntry *e, int tries)
 		CGPT_ATTRIBUTE_TRIES_MASK;
 }
 
+void SetEntryErrorCounter(GptEntry *e, int error_counter)
+{
+	e->attrs.fields.gpt_att &= ~CGPT_ATTRIBUTE_ERROR_COUNTER_MASK;
+	e->attrs.fields.gpt_att |=
+            (error_counter << CGPT_ATTRIBUTE_ERROR_COUNTER_OFFSET) &
+            CGPT_ATTRIBUTE_ERROR_COUNTER_MASK;
+}
+
 void GetCurrentKernelUniqueGuid(GptData *gpt, void *dest)
 {
 	GptEntry *entries = (GptEntry *)gpt->primary_entries;
 	GptEntry *e = entries + gpt->current_kernel;
-	Memcpy(dest, &e->unique, sizeof(Guid));
+	memcpy(dest, &e->unique, sizeof(Guid));
 }
 
 void GptModified(GptData *gpt) {

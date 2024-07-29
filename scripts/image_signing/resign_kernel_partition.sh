@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+# Copyright 2010 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # Script that just takes in a kernel partition and outputs a new vblock
 # signed with the specific keys. For use on signing servers.
 
-# vbutil_kernel must be in the system path.
+# futility must be in the system path.
 
 SCRIPT_DIR=$(dirname $0)
 
@@ -21,8 +21,8 @@ if [ $# -lt 4 ] || [ $# -gt 5 ]; then
 fi
 
 # Make sure the tools we need are available.
-type -P vbutil_kernel &>/dev/null || \
-  ( echo "vbutil_kernel tool not found."; exit 1; )
+type -P futility &>/dev/null || \
+  ( echo "futility tool not found."; exit 1; )
 
 SRC_KPART=$1
 DST_VBLOCK=$2
@@ -35,7 +35,7 @@ if [ -z $VERSION ]; then
 fi
 echo "Using kernel version: $VERSION"
 
-vbutil_kernel --repack "${DST_VBLOCK}" \
+futility vbutil_kernel --repack "${DST_VBLOCK}" \
   --vblockonly \
   --keyblock "${KERNEL_KEYBLOCK}" \
   --signprivate "${KERNEL_DATAKEY}" \
@@ -43,4 +43,3 @@ vbutil_kernel --repack "${DST_VBLOCK}" \
   --oldblob "${SRC_KPART}"
 
 echo "New kernel vblock was output to ${DST_VBLOCK}"
-

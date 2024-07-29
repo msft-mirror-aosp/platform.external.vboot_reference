@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -15,15 +15,15 @@
 
 
 int main(int argc, char** argv) {
-  TlclLibInit();
+	TlclLibInit();
 
-  TlclStartup();
-  TlclSelfTestFull();
+	TlclStartup();
+	TlclSelfTestFull();
 
-  TlclAssertPhysicalPresence();
+	TlclAssertPhysicalPresence();
 
-  TlclWriteLock(INDEX0);
+	TlclWriteLock(INDEX0);
 
-  printf("Locked 0x%x\n", INDEX0);
-  exit(0);
+	printf("Locked %#x\n", INDEX0);
+	exit(0);
 }

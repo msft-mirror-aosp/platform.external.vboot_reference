@@ -1,4 +1,4 @@
-/* Copyright 2015 The Chromium OS Authors. All rights reserved.
+/* Copyright 2015 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -6,8 +6,8 @@
  * and write to NOR flash.
  */
 
-#ifndef VBOOT_REFERCENCE_CGPT_CGPT_NOR_H_
-#define VBOOT_REFERCENCE_CGPT_CGPT_NOR_H_
+#ifndef VBOOT_REFERENCE_CGPT_NOR_H_
+#define VBOOT_REFERENCE_CGPT_NOR_H_
 
 // Obtain the MTD size from its sysfs node. |mtd_device| should point to
 // a dev node such as /dev/mtd0. This function returns 0 on success.
@@ -23,12 +23,10 @@ int ForkExecL(const char *cwd, const char *cmd, ...);
 // Exec "rm" to remove |dir|.
 int RemoveDir(const char *dir);
 
-// Read RW_GPT from NOR flash to "rw_gpt" in a temp dir |temp_dir_template|.
-// |temp_dir_template| is passed to mkdtemp() so it must satisfy all
-// requirements by mkdtemp().
-int ReadNorFlash(char *temp_dir_template);
+// Read RW_GPT from NOR flash to "rw_gpt" in dir.
+int ReadNorFlash(const char *dir);
 
 // Write "rw_gpt" back to NOR flash. We write the file in two parts for safety.
 int WriteNorFlash(const char *dir);
 
-#endif  // VBOOT_REFERCENCE_CGPT_CGPT_NOR_H_
+#endif  /* VBOOT_REFERENCE_CGPT_NOR_H_ */

@@ -1,11 +1,12 @@
 #!/bin/bash
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
 # Generate .vbpubk and .vbprivk pairs with the given algorithm id.
 
 # Load common constants and functions.
+# shellcheck source=common.sh
 . "$(dirname "$0")/common.sh"
 
 if [ $# -ne 2 ]; then

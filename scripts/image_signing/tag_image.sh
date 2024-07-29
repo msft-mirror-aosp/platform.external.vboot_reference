@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -22,8 +22,6 @@ DEFINE_string leave_firmware_alone "" \
   "(auto-update) For BIOS development use ONLY (1 to enable, 0 to disable)"
 DEFINE_string leave_core "" \
   "(crash-reporter) Leave core dumps (1 to enable, 0 to disable)"
-DEFINE_string crosh_workarounds "" \
-  "(crosh) Keep crosh (1 to keep, 0 to disable *irreversible*)"
 
 # Parameters for manipulating /etc/lsb-release.
 DEFINE_boolean remove_test_label false \
@@ -152,12 +150,6 @@ process_all_tags() {
     "${rootfs}" \
     /root/.leave_core \
     "${FLAGS_leave_core}"
-
-  process_tag "${do_modification}" \
-    "(crosh) crosh_workarounds" \
-    "${rootfs}" \
-    /usr/bin/crosh-workarounds \
-    "${FLAGS_crosh_workarounds}"
 }
 
 # Iterates through all options for manipulating the lsb-release.
@@ -178,6 +170,7 @@ process_all_lsb_mods() {
     fi
     if [ ${do_modifications} = ${FLAGS_TRUE} ]; then
       ${sudo} sed -i 's/\btest\b//' "${lsb}" &&
+        restore_lsb_selinux "${lsb}" &&
         echo "Test Label removed from /etc/lsb-release"
     fi
   fi
@@ -188,6 +181,7 @@ process_all_lsb_mods() {
     fi
     if [ ${do_modifications} = ${FLAGS_TRUE} ]; then
       ${sudo} sed -i 's/\bdev\b/beta/' "${lsb}" &&
+        restore_lsb_selinux "${lsb}" &&
         echo "Dev Channel Label was changed to Beta"
     fi
   fi
@@ -202,26 +196,34 @@ if [[ -z "${IMAGE}" || ! -f "${IMAGE}" ]]; then
 fi
 
 # First round, mount as read-only and check if we need any modifications.
-rootfs=$(make_temp_dir)
-mount_image_partition_ro "${IMAGE}" 3 "${rootfs}"
+if [[ -d "${IMAGE}" ]]; then
+  rootfs="${IMAGE}"
+else
+  loopdev=$(loopback_partscan "${IMAGE}")
+  rootfs=$(make_temp_dir)
+  mount_loop_image_partition_ro "${loopdev}" 3 "${rootfs}"
+fi
 
 # we don't have tags in stateful partition yet...
 # stateful_dir=$(make_temp_dir)
-# mount_image_partition ${IMAGE} 1 ${stateful_dir}
+# mount_loop_image_partition "${loopdev}" 1 "${stateful_dir}"
 
 process_all_tags "${rootfs}" ${FLAGS_FALSE}
 process_all_lsb_mods "${rootfs}" ${FLAGS_FALSE}
 
 if [ ${g_modified} = ${FLAGS_TRUE} ]; then
-  # remount as RW (we can't use mount -o rw,remount because of loop device)
-  sudo umount "${rootfs}"
-  mount_image_partition "${IMAGE}" 3 "${rootfs}"
+  # Remount as RW.  We can't use `mount -o rw,remount` because of the bits in
+  # the ext4 header we've set to block that.  See enable_rw_mount for details.
+  if [[ ! -d "${IMAGE}" ]]; then
+    sudo umount "${rootfs}"
+    mount_loop_image_partition "${loopdev}" 3 "${rootfs}"
+  fi
 
   # second round, apply the modification to image.
   process_all_tags "${rootfs}" ${FLAGS_TRUE}
   process_all_lsb_mods "${rootfs}" ${FLAGS_TRUE}
 
-  # this is supposed to be automatically done in mount_image_partition,
+  # This is supposed to be automatically done in mount_loop_image_partition,
   # but it's no harm to explicitly make it again here.
   tag_as_needs_to_be_resigned "${rootfs}"
   echo "IMAGE IS MODIFIED. PLEASE REMEMBER TO RESIGN YOUR IMAGE."

@@ -1,4 +1,4 @@
-/* Copyright 2012 The Chromium OS Authors. All rights reserved.
+/* Copyright 2012 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -10,19 +10,17 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#if !defined (__FreeBSD__) && !defined(__OpenBSD__)
+#include <sys/sysmacros.h>
+#endif
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "futility.h"
 #include "host_common.h"
 #include "kernel_blob.h"
 #include "vboot_api.h"
 #include "vboot_host.h"
-
-#ifdef USE_MTD
-#include <linux/major.h>
-#include <mtd/mtd-user.h>
-#include <mtdutils.h>
-#endif
 
 typedef ssize_t (*ReadFullyFn)(void *ctx, void *buf, size_t count);
 
@@ -42,14 +40,6 @@ static ssize_t ReadFullyWithRead(void *ctx, void *buf, size_t count)
 	}
 	return nr_read;
 }
-
-#ifdef USE_MTD
-static ssize_t ReadFullyWithMtdRead(void *ctx, void *buf, size_t count)
-{
-	MtdReadContext *mtd_ctx = (MtdReadContext*)ctx;
-	return mtd_read_data(mtd_ctx, buf, count);
-}
-#endif
 
 /* Skip the stream by calling |read_fn| many times. Return 0 on success. */
 static int SkipWithRead(void *ctx, ReadFullyFn read_fn, size_t count)
@@ -72,31 +62,31 @@ static int SkipWithRead(void *ctx, ReadFullyFn read_fn, size_t count)
 static char *FindKernelConfigFromStream(void *ctx, ReadFullyFn read_fn,
 					uint64_t kernel_body_load_address)
 {
-	VbKeyBlockHeader key_block;
-	VbKernelPreambleHeader preamble;
+	struct vb2_keyblock keyblock;
+	struct vb2_kernel_preamble preamble;
 	uint32_t now = 0;
 	uint32_t offset = 0;
 
-	/* Skip the key block */
-	if (read_fn(ctx, &key_block, sizeof(key_block)) != sizeof(key_block)) {
-		VbExError("not enough data to fill key block header\n");
+	/* Skip the keyblock */
+	if (read_fn(ctx, &keyblock, sizeof(keyblock)) != sizeof(keyblock)) {
+		FATAL("not enough data to fill keyblock header\n");
 		return NULL;
 	}
-	ssize_t to_skip = key_block.key_block_size - sizeof(key_block);
+	ssize_t to_skip = keyblock.keyblock_size - sizeof(keyblock);
 	if (to_skip < 0 || SkipWithRead(ctx, read_fn, to_skip)) {
-		VbExError("key_block_size advances past the end of the blob\n");
+		FATAL("keyblock_size advances past the end of the blob\n");
 		return NULL;
 	}
-	now += key_block.key_block_size;
+	now += keyblock.keyblock_size;
 
 	/* Open up the preamble */
 	if (read_fn(ctx, &preamble, sizeof(preamble)) != sizeof(preamble)) {
-		VbExError("not enough data to fill preamble\n");
+		FATAL("not enough data to fill preamble\n");
 		return NULL;
 	}
 	to_skip = preamble.preamble_size - sizeof(preamble);
 	if (to_skip < 0 || SkipWithRead(ctx, read_fn, to_skip)) {
-		VbExError("preamble_size advances past the end of the blob\n");
+		FATAL("preamble_size advances past the end of the blob\n");
 		return NULL;
 	}
 	now += preamble.preamble_size;
@@ -114,17 +104,16 @@ static char *FindKernelConfigFromStream(void *ctx, ReadFullyFn read_fn,
 	     CROS_CONFIG_SIZE) + now;
 	to_skip = offset - now;
 	if (to_skip < 0 || SkipWithRead(ctx, read_fn, to_skip)) {
-		VbExError("params are outside of the memory blob: %x\n",
-			  offset);
+		FATAL("params are outside of the memory blob: %x\n", offset);
 		return NULL;
 	}
 	char *ret = malloc(CROS_CONFIG_SIZE);
 	if (!ret) {
-		VbExError("No memory\n");
+		FATAL("No memory\n");
 		return NULL;
 	}
 	if (read_fn(ctx, ret, CROS_CONFIG_SIZE) != CROS_CONFIG_SIZE) {
-		VbExError("Cannot read kernel config\n");
+		FATAL("Cannot read kernel config\n");
 		free(ret);
 		ret = NULL;
 	}
@@ -135,41 +124,22 @@ char *FindKernelConfig(const char *infile, uint64_t kernel_body_load_address)
 {
 	char *newstr = NULL;
 
-	int fd = open(infile, O_RDONLY | O_CLOEXEC | O_LARGEFILE);
+	int fd = open(infile, O_RDONLY | O_CLOEXEC
+#if !defined(__FreeBSD__) && !defined(__OpenBSD__)
+			| O_LARGEFILE
+#endif
+			);
 	if (fd < 0) {
-		VbExError("Cannot open %s\n", infile);
+		FATAL("Cannot open %s\n", infile);
 		return NULL;
 	}
 
 	void *ctx = &fd;
 	ReadFullyFn read_fn = ReadFullyWithRead;
 
-#ifdef USE_MTD
-	struct stat stat_buf;
-	if (fstat(fd, &stat_buf)) {
-		VbExError("Cannot stat %s\n", infile);
-		return NULL;
-	}
-
-	int is_mtd = (major(stat_buf.st_rdev) == MTD_CHAR_MAJOR);
-	if (is_mtd) {
-		ctx = mtd_read_descriptor(fd, infile);
-		if (!ctx) {
-			VbExError("Cannot read from MTD device %s\n", infile);
-			return NULL;
-		}
-		read_fn = ReadFullyWithMtdRead;
-	}
-#endif
-
 	newstr = FindKernelConfigFromStream(ctx, read_fn,
 					    kernel_body_load_address);
 
-#ifdef USE_MTD
-	if (is_mtd) {
-		mtd_read_close(ctx);
-	}
-#endif
 	close(fd);
 
 	return newstr;

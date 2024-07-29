@@ -1,19 +1,19 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
  * Tests for host misc library vboot2 functions
  */
 
+#include <stdio.h>
 #include <unistd.h>
 
-#include "2sysincludes.h"
 #include "2common.h"
-#include "vb2_common.h"
+#include "2sysincludes.h"
+#include "common/tests.h"
 #include "host_common.h"
+#include "host_common21.h"
 #include "host_misc.h"
-
-#include "test_common.h"
 
 static void misc_tests(void)
 {
@@ -27,15 +27,17 @@ static void misc_tests(void)
 	TEST_EQ(vb2_desc_size("foob"), 8, "desc size 'foob'");
 }
 
-static void file_tests(void)
+static void file_tests(const char *temp_dir)
 {
-	const char *testfile = "file_tests.dat";
+	char *testfile;
 	const uint8_t test_data[] = "Some test data";
 	uint8_t *read_data;
 	uint32_t read_size;
 
-	uint8_t cbuf[sizeof(struct vb2_struct_common) + 12];
-	struct vb2_struct_common *c = (struct vb2_struct_common *)cbuf;
+	uint8_t cbuf[sizeof(struct vb21_struct_common) + 12];
+	struct vb21_struct_common *c = (struct vb21_struct_common *)cbuf;
+
+	xasprintf(&testfile, "%s/file_tests.dat", temp_dir);
 
 	unlink(testfile);
 
@@ -58,7 +60,7 @@ static void file_tests(void)
 	c->total_size = sizeof(cbuf);
 	c->magic = 0x1234;
 	cbuf[sizeof(cbuf) - 1] = 0xed;  /* Some non-zero data at the end */
-	TEST_SUCC(vb2_write_object(testfile, c), "vb2_write_object() good");
+	TEST_SUCC(vb21_write_object(testfile, c), "vb2_write_object() good");
 	TEST_SUCC(vb2_read_file(testfile, &read_data, &read_size),
 		  "vb2_read_file() object");
 	TEST_EQ(read_size, c->total_size, "  data size");
@@ -70,8 +72,14 @@ static void file_tests(void)
 
 int main(int argc, char* argv[])
 {
+	if (argc != 2) {
+		fprintf(stderr, "Usage: %s <temp_dir>\n", argv[0]);
+		return -1;
+	}
+	const char *temp_dir = argv[1];
+
 	misc_tests();
-	file_tests();
+	file_tests(temp_dir);
 
 	return gTestSuccess ? 0 : 255;
 }
