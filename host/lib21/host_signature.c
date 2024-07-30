@@ -1,4 +1,4 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -7,27 +7,19 @@
 
 #include <openssl/rsa.h>
 
-#include "2sysincludes.h"
 #include "2common.h"
 #include "2rsa.h"
 #include "2sha.h"
-#include "vb2_common.h"
+#include "2sysincludes.h"
 #include "host_common.h"
-#include "host_key2.h"
-#include "host_signature2.h"
+#include "host_common21.h"
+#include "host_key21.h"
 #include "host_misc.h"
+#include "host_p11.h"
+#include "host_signature21.h"
 
-/**
- * Get the digest info for a hash algorithm
- *
- * @param hash_alg	Hash algorithm
- * @param buf_ptr	On success, points to the digest info
- * @param size_ptr	On success, contains the info size in bytes
- * @return VB2_SUCCESS, or non-zero error code on failure.
- */
-static int vb2_digest_info(enum vb2_hash_algorithm hash_alg,
-			   const uint8_t **buf_ptr,
-			   uint32_t *size_ptr)
+vb2_error_t vb2_digest_info(enum vb2_hash_algorithm hash_alg,
+			    const uint8_t **buf_ptr, uint32_t *size_ptr)
 {
 	*buf_ptr = NULL;
 	*size_ptr = 0;
@@ -76,30 +68,29 @@ static int vb2_digest_info(enum vb2_hash_algorithm hash_alg,
 	}
 }
 
-int vb2_sign_data(struct vb2_signature **sig_ptr,
-		  const uint8_t *data,
-		  uint32_t size,
-		  const struct vb2_private_key *key,
-		  const char *desc)
+vb2_error_t vb21_sign_data(struct vb21_signature **sig_ptr, const uint8_t *data,
+			   uint32_t size, const struct vb2_private_key *key,
+			   const char *desc)
 {
-	struct vb2_signature s = {
-		.c.magic = VB2_MAGIC_SIGNATURE,
-		.c.struct_version_major = VB2_SIGNATURE_VERSION_MAJOR,
-		.c.struct_version_minor = VB2_SIGNATURE_VERSION_MINOR,
+	struct vb21_signature s = {
+		.c.magic = VB21_MAGIC_SIGNATURE,
+		.c.struct_version_major = VB21_SIGNATURE_VERSION_MAJOR,
+		.c.struct_version_minor = VB21_SIGNATURE_VERSION_MINOR,
 		.c.fixed_size = sizeof(s),
 		.sig_alg = key->sig_alg,
 		.hash_alg = key->hash_alg,
 		.data_size = size,
-		.guid = key->guid,
+		.id = key->id,
 	};
 
+	vb2_error_t rv;
 	struct vb2_digest_context dc;
 	uint32_t digest_size;
 	const uint8_t *info = NULL;
 	uint32_t info_size = 0;
 	uint32_t sig_digest_size;
-	uint8_t *sig_digest;
-	uint8_t *buf;
+	uint8_t *sig_digest = NULL;
+	uint8_t *buf = NULL;
 
 	*sig_ptr = NULL;
 
@@ -111,53 +102,72 @@ int vb2_sign_data(struct vb2_signature **sig_ptr,
 
 	s.sig_offset = s.c.fixed_size + s.c.desc_size;
 	s.sig_size = vb2_sig_size(key->sig_alg, key->hash_alg);
-	if (!s.sig_size)
-		return VB2_SIGN_DATA_SIG_SIZE;
+	if (!s.sig_size) {
+		rv = VB2_SIGN_DATA_SIG_SIZE;
+		goto done;
+	}
 
 	s.c.total_size = s.sig_offset + s.sig_size;
+	/* Allocate signature buffer and copy header */
+	buf = calloc(1, s.c.total_size);
+	if (!buf) {
+		rv = VB2_ERROR_UNKNOWN;
+		goto done;
+	}
+	memcpy(buf, &s, sizeof(s));
+
+	/* strcpy() is ok because we allocated buffer based on desc length */
+	if (desc)
+		strcpy((char *)buf + s.c.fixed_size, desc);
+
+	/* If it is PKCS11#11 key, we could sign with pkcs11_sign instead */
+	if (key->key_location == PRIVATE_KEY_P11) {
+		/* RSA-encrypt the signature */
+		rv = pkcs11_sign(key->p11_key, key->hash_alg, data, size,
+				 buf + s.sig_offset, s.sig_size);
+		goto done;
+	}
 
 	/* Determine digest size and allocate buffer */
 	if (s.sig_alg != VB2_SIG_NONE) {
-		if (vb2_digest_info(s.hash_alg, &info, &info_size))
-			return VB2_SIGN_DATA_DIGEST_INFO;
+		if (vb2_digest_info(s.hash_alg, &info, &info_size)) {
+			rv = VB2_SIGN_DATA_DIGEST_INFO;
+			goto done;
+		}
 	}
 
 	digest_size = vb2_digest_size(key->hash_alg);
-	if (!digest_size)
-		return VB2_SIGN_DATA_DIGEST_SIZE;
+	if (!digest_size) {
+		rv = VB2_SIGN_DATA_DIGEST_SIZE;
+		goto done;
+	}
 
 	sig_digest_size = info_size + digest_size;
 	sig_digest = malloc(sig_digest_size);
-	if (!sig_digest)
-		return VB2_SIGN_DATA_DIGEST_ALLOC;
+	if (!sig_digest) {
+		rv = VB2_SIGN_DATA_DIGEST_ALLOC;
+		goto done;
+	}
 
 	/* Prepend digest info, if any */
 	if (info_size)
 		memcpy(sig_digest, info, info_size);
 
 	/* Calculate hash digest */
-	if (vb2_digest_init(&dc, s.hash_alg)) {
-		free(sig_digest);
-		return VB2_SIGN_DATA_DIGEST_INIT;
+	if (vb2_digest_init(&dc, false, s.hash_alg, 0)) {
+		rv = VB2_SIGN_DATA_DIGEST_INIT;
+		goto done;
 	}
 
 	if (vb2_digest_extend(&dc, data, size)) {
-		free(sig_digest);
-		return VB2_SIGN_DATA_DIGEST_EXTEND;
+		rv = VB2_SIGN_DATA_DIGEST_EXTEND;
+		goto done;
 	}
 
 	if (vb2_digest_finalize(&dc, sig_digest + info_size, digest_size)) {
-		free(sig_digest);
-		return VB2_SIGN_DATA_DIGEST_FINALIZE;
+		rv = VB2_SIGN_DATA_DIGEST_FINALIZE;
+		goto done;
 	}
-
-	/* Allocate signature buffer and copy header */
-	buf = calloc(1, s.c.total_size);
-	memcpy(buf, &s, sizeof(s));
-
-	/* strcpy() is ok because we allocated buffer based on desc length */
-	if (desc)
-		strcpy((char *)buf + s.c.fixed_size, desc);
 
 	if (s.sig_alg == VB2_SIG_NONE) {
 		/* Bare hash signature is just the digest */
@@ -169,44 +179,47 @@ int vb2_sign_data(struct vb2_signature **sig_ptr,
 					buf + s.sig_offset,
 					key->rsa_private_key,
 					RSA_PKCS1_PADDING) == -1) {
-			free(sig_digest);
-			free(buf);
-			return VB2_SIGN_DATA_RSA_ENCRYPT;
+			rv = VB2_SIGN_DATA_RSA_ENCRYPT;
+			goto done;
 		}
 	}
-
+	rv = VB2_SUCCESS;
+done:
 	free(sig_digest);
-	*sig_ptr = (struct vb2_signature *)buf;
-	return VB2_SUCCESS;
+	if (rv == VB2_SUCCESS)
+		*sig_ptr = (struct vb21_signature *)buf;
+	else
+		free(buf);
+	return rv;
 }
 
-int vb2_sig_size_for_key(uint32_t *size_ptr,
-			 const struct vb2_private_key *key,
-			 const char *desc)
+vb2_error_t vb21_sig_size_for_key(uint32_t *size_ptr,
+				  const struct vb2_private_key *key,
+				  const char *desc)
 {
 	uint32_t size = vb2_sig_size(key->sig_alg, key->hash_alg);
 
 	if (!size)
 		return VB2_ERROR_SIG_SIZE_FOR_KEY;
 
-	size += sizeof(struct vb2_signature);
+	size += sizeof(struct vb21_signature);
 	size += vb2_desc_size(desc ? desc : key->desc);
 
 	*size_ptr = size;
 	return VB2_SUCCESS;
 }
 
-int vb2_sig_size_for_keys(uint32_t *size_ptr,
-			  const struct vb2_private_key **key_list,
-			  uint32_t key_count)
+vb2_error_t vb21_sig_size_for_keys(uint32_t *size_ptr,
+				   const struct vb2_private_key **key_list,
+				   uint32_t key_count)
 {
 	uint32_t total = 0, size = 0;
-	int rv, i;
+	vb2_error_t rv, i;
 
 	*size_ptr = 0;
 
 	for (i = 0; i < key_count; i++) {
-		rv = vb2_sig_size_for_key(&size, key_list[i], NULL);
+		rv = vb21_sig_size_for_key(&size, key_list[i], NULL);
 		if (rv)
 			return rv;
 		total += size;
@@ -216,16 +229,15 @@ int vb2_sig_size_for_keys(uint32_t *size_ptr,
 	return VB2_SUCCESS;
 }
 
-int vb2_sign_object(uint8_t *buf,
-		    uint32_t sig_offset,
-		    const struct vb2_private_key *key,
-		    const char *desc)
+vb2_error_t vb21_sign_object(uint8_t *buf, uint32_t sig_offset,
+			     const struct vb2_private_key *key,
+			     const char *desc)
 {
-	struct vb2_struct_common *c = (struct vb2_struct_common *)buf;
-	struct vb2_signature *sig = NULL;
-	int rv;
+	struct vb21_struct_common *c = (struct vb21_struct_common *)buf;
+	struct vb21_signature *sig = NULL;
+	vb2_error_t rv;
 
-	rv = vb2_sign_data(&sig, buf, sig_offset, key, desc);
+	rv = vb21_sign_data(&sig, buf, sig_offset, key, desc);
 	if (rv)
 		return rv;
 
@@ -240,19 +252,18 @@ int vb2_sign_object(uint8_t *buf,
 	return VB2_SUCCESS;
 }
 
-int vb2_sign_object_multiple(uint8_t *buf,
-			     uint32_t sig_offset,
-			     const struct vb2_private_key **key_list,
-			     uint32_t key_count)
+vb2_error_t vb21_sign_object_multiple(uint8_t *buf, uint32_t sig_offset,
+				      const struct vb2_private_key **key_list,
+				      uint32_t key_count)
 {
-	struct vb2_struct_common *c = (struct vb2_struct_common *)buf;
+	struct vb21_struct_common *c = (struct vb21_struct_common *)buf;
 	uint32_t sig_next = sig_offset;
-	int rv, i;
+	vb2_error_t rv, i;
 
 	for (i = 0; i < key_count; i++)	{
-		struct vb2_signature *sig = NULL;
+		struct vb21_signature *sig = NULL;
 
-		rv = vb2_sign_data(&sig, buf, sig_offset, key_list[i], NULL);
+		rv = vb21_sign_data(&sig, buf, sig_offset, key_list[i], NULL);
 		if (rv)
 			return rv;
 
