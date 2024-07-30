@@ -1,4 +1,4 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -7,9 +7,15 @@
  * To download UEFI standard, please visit UEFI homepage:
  *    http://www.uefi.org/
  */
+
 #ifndef VBOOT_REFERENCE_CGPTLIB_GPT_H_
 #define VBOOT_REFERENCE_CGPTLIB_GPT_H_
+
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif  /* __cplusplus */
 
 /* From the specification */
 #define GPT_HEADER_SIGNATURE_SIZE 8
@@ -18,6 +24,9 @@
 
 /* From https://chromium-review.googlesource.com/31264 */
 #define GPT_HEADER_SIGNATURE2 "CHROMEOS"
+
+/* From http://crosbug.com/p/52595 */
+#define GPT_HEADER_SIGNATURE_IGNORED "IGNOREME"
 
 /*
  * The first 3 numbers should be stored in network-endian format according to
@@ -40,10 +49,14 @@
 	{{{0x3cb8e202,0x3b7e,0x47dd,0x8a,0x3c,{0x7f,0xf2,0xa1,0x3c,0xfc,0xec}}}}
 #define GPT_ENT_TYPE_CHROMEOS_RESERVED \
 	{{{0x2e0a753d,0x9e48,0x43b0,0x83,0x37,{0xb1,0x51,0x92,0xcb,0x1b,0x5e}}}}
-#define GPT_ENT_TYPE_LINUX_DATA \
+#define GPT_ENT_TYPE_BASIC_DATA \
 	{{{0xebd0a0a2,0xb9e5,0x4433,0x87,0xc0,{0x68,0xb6,0xb7,0x26,0x99,0xc7}}}}
 #define GPT_ENT_TYPE_LINUX_FS \
 	{{{0x0fc63daf,0x8483,0x4772,0x8e,0x79,{0x3d,0x69,0xd8,0x47,0x7d,0xe4}}}}
+#define GPT_ENT_TYPE_CHROMEOS_MINIOS \
+	{{{0x09845860,0x705f,0x4bb5,0xb1,0x6c,{0x8a,0x8a,0x09,0x9c,0xaf,0x52}}}}
+#define GPT_ENT_TYPE_CHROMEOS_HIBERNATE \
+	{{{0x3f0f8318,0xf146,0x4e6b,0x82,0x22,{0xc2,0x8c,0x8f,0x02,0xe0,0xd5}}}}
 
 #define UUID_NODE_LEN 6
 #define GUID_SIZE 16
@@ -105,7 +118,12 @@ typedef struct {
 	uint64_t ending_lba;
 	union {
 		struct {
-			uint16_t reserved[3];
+			uint8_t required:1;
+			uint8_t efi_ignore:1;
+			uint8_t legacy_boot:1;
+			uint8_t reserved1:5;
+			uint8_t reserved2;
+			uint16_t reserved[2];
 			uint16_t gpt_att;
 		} __attribute__((packed)) fields;
 		uint64_t whole;
@@ -115,5 +133,9 @@ typedef struct {
 } __attribute__((packed)) GptEntry;
 
 #define GPTENTRY_EXPECTED_SIZE 128
+
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
 
 #endif  /* VBOOT_REFERENCE_CGPTLIB_GPT_H_ */

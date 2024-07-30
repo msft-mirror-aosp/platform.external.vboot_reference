@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+# Copyright 2010 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -11,14 +11,17 @@
 
 set_lsb_release_keyval() {
   local rootfs=$1
+  local lsb="${rootfs}/etc/lsb-release"
   local key=$2
   local value=$3
-  local temp_lsb_release="$rootfs/etc/temp-lsb-release"
-  echo "$key=$value" | sudo tee "$temp_lsb_release" > /dev/null
-  grep -Ev "^$key=" "$rootfs/etc/lsb-release" \
-    | sudo tee -a "$temp_lsb_release" > /dev/null
-  sudo sort -o "$rootfs/etc/lsb-release" "$temp_lsb_release"
-  sudo rm -f "$temp_lsb_release"
+  local data
+  data=$(
+    (
+    grep -Ev "^${key}=" "${lsb}"
+    echo "${key}=${value}"
+    ) | sort
+  )
+  sudo tee "${lsb}" <<<"${data}" >/dev/null
 }
 
 main() {
@@ -44,16 +47,25 @@ EOF
     exit 1
   fi
 
+  # If there are no key/value pairs to process, we don't need write access.
+  local ro=$([[ $# -eq 0 ]] && echo true || echo false)
+
   local image=$1
   shift
-  local rootfs=$(make_temp_dir)
+  local loopdev rootfs
 
-  # If there are no key/value pairs to process, we don't need write access.
-  if [[ $# -eq 0 ]]; then
-    mount_image_partition_ro "${image}" 3 "${rootfs}"
+  if [[ -d "${image}" ]]; then
+    rootfs="${image}"
   else
-    mount_image_partition "${image}" 3 "${rootfs}"
-    touch "${image}"  # Updates the image modification time.
+    rootfs=$(make_temp_dir)
+    loopdev=$(loopback_partscan "${image}")
+
+    if ${ro}; then
+      mount_loop_image_partition_ro "${loopdev}" 3 "${rootfs}"
+    else
+      mount_loop_image_partition "${loopdev}" 3 "${rootfs}"
+      touch "${image}"  # Updates the image modification time.
+    fi
   fi
 
   # Process all the key/value pairs.
@@ -63,9 +75,15 @@ EOF
     shift 2
     set_lsb_release_keyval "${rootfs}" "${key}" "${value}"
   done
+  if ! ${ro}; then
+    restore_lsb_selinux "${rootfs}/etc/lsb-release"
+  fi
 
   # Dump the final state.
   cat "${rootfs}/etc/lsb-release"
+
+  # Dump security context for lsb-release file
+  getfattr --absolute-names -n security.selinux "${rootfs}/etc/lsb-release"
 }
 
 main "$@"

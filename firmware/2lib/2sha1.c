@@ -1,4 +1,4 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -6,9 +6,9 @@
  * Open Source Project (platorm/system/core.git/libmincrypt/sha.c
  */
 
-#include "2sysincludes.h"
 #include "2common.h"
 #include "2sha.h"
+#include "2sysincludes.h"
 
 /*
  * Some machines lack byteswap.h and endian.h. These have to use the
@@ -194,15 +194,15 @@ static void sha1_transform(struct vb2_sha1_context *ctx)
 	uint8_t *p = ctx->buf;
 	int t;
 
-	for(t = 0; t < 16; ++t) {
-		uint32_t tmp = *p++ << 24;
+	for (t = 0; t < 16; ++t) {
+		uint32_t tmp = (uint32_t)*p++ << 24;
 		tmp |= *p++ << 16;
 		tmp |= *p++ << 8;
 		tmp |= *p++;
 		W[t] = tmp;
 	}
 
-	for(; t < 80; t++) {
+	for (; t < 80; t++) {
 		W[t] = rol(1,W[t-3] ^ W[t-8] ^ W[t-14] ^ W[t-16]);
 	}
 
@@ -212,7 +212,7 @@ static void sha1_transform(struct vb2_sha1_context *ctx)
 	D = ctx->state[3];
 	E = ctx->state[4];
 
-	for(t = 0; t < 80; t++) {
+	for (t = 0; t < 80; t++) {
 		uint32_t tmp = rol(5,A) + E + W[t];
 
 		if (t < 20)
