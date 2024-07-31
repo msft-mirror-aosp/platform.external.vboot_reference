@@ -1,11 +1,15 @@
-/* Copyright 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
  * Constants describing the kernel blob content.
  */
+
 #ifndef VBOOT_REFERENCE_KERNEL_BLOB_H_
 #define VBOOT_REFERENCE_KERNEL_BLOB_H_
+
+/* Linux vmlinuz header signature */
+#define VMLINUZ_HEADER_SIG 0x53726448
 
 /* Maximum kernel command-line size */
 #define CROS_CONFIG_SIZE 4096
@@ -31,7 +35,7 @@ struct linux_kernel_e820entry {
 	uint64_t start_addr;
 	uint64_t segment_size;
 	uint32_t segment_type;
-} __attribute__ ((packed));
+} __attribute__((packed));
 
 /* Simplified version of the x86 kernel zeropage table */
 struct linux_kernel_params {
@@ -58,6 +62,6 @@ struct linux_kernel_params {
 	uint8_t pad6[0x2d0 - 0x236];
 	struct linux_kernel_e820entry
 		e820_entries[E820_ENTRY_MAX];	/* 2d0-cd0 */
-} __attribute__ ((packed));
+} __attribute__((packed));
 
-#endif /* VBOOT_REFERENCE_KERNEL_BLOB_H_ */
+#endif  /* VBOOT_REFERENCE_KERNEL_BLOB_H_ */

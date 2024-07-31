@@ -1,6 +1,7 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -8,8 +9,8 @@
 #include <unistd.h>
 
 #include "cgpt.h"
-#include "cgpt_params.h"
 #include "cgptlib_internal.h"
+#include "cgpt_params.h"
 #include "vboot_host.h"
 
 int CgptGetBootPartitionNumber(CgptBootParams *params) {
@@ -24,8 +25,8 @@ int CgptGetBootPartitionNumber(CgptBootParams *params) {
                            params->drive_size))
     return CGPT_FAILED;
 
-  if (GPT_SUCCESS != (gpt_retval = GptSanityCheck(&drive.gpt))) {
-    Error("GptSanityCheck() returned %d: %s\n",
+  if (GPT_SUCCESS != (gpt_retval = GptValidityCheck(&drive.gpt))) {
+    Error("GptValidityCheck() returned %d: %s\n",
           gpt_retval, GptError(gpt_retval));
     retval = CGPT_FAILED;
     goto done;
@@ -42,7 +43,7 @@ int CgptGetBootPartitionNumber(CgptBootParams *params) {
 
   int numEntries = GetNumberOfEntries(&drive);
   int i;
-  for(i = 0; i < numEntries; i++) {
+  for (i = 0; i < numEntries; i++) {
       GptEntry *entry = GetEntry(&drive.gpt, ANY_VALID, i);
 
       if (GuidEqual(&entry->unique, &drive.pmbr.boot_guid)) {
@@ -105,8 +106,8 @@ int CgptBoot(CgptBootParams *params) {
   }
 
   if (params->partition) {
-    if (GPT_SUCCESS != (gpt_retval = GptSanityCheck(&drive.gpt))) {
-      Error("GptSanityCheck() returned %d: %s\n",
+    if (GPT_SUCCESS != (gpt_retval = GptValidityCheck(&drive.gpt))) {
+      Error("GptValidityCheck() returned %d: %s\n",
             gpt_retval, GptError(gpt_retval));
       goto done;
     }

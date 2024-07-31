@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -23,9 +23,16 @@ main() {
   fi
 
   local image=$1
-  local rootfs=$(make_temp_dir)
+
+  local loopdev rootfs
+  if [[ -d "${image}" ]]; then
+    rootfs="${image}"
+  else
+    rootfs=$(make_temp_dir)
+    loopdev=$(loopback_partscan "${image}")
+    mount_loop_image_partition_ro "${loopdev}" 3 "${rootfs}"
+  fi
   local key_location="/usr/share/update_engine/update-payload-key.pub.pem"
-  mount_image_partition_ro "$image" 3 "$rootfs"
   if [ ! -e "$rootfs/$key_location" ]; then
     die "Update payload verification key not found at $key_location"
   fi
