@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -67,6 +67,8 @@ main() {
     local output
     # Copy of a string before it has been through sed
     local pre_sed
+    # Where the disk image is mounted.
+    local loopdev
 
     if [[ $# -ne 1 ]] && [[ $# -ne 2 ]]; then
         usage
@@ -89,25 +91,26 @@ main() {
     # Either way, load test-expectations data from config.
     . "$configfile" || return 1
 
-    local kernelblob=$(make_temp_file)
+    # Set up the image on a loopback device so it's faster to access.
+    local loopdev
+    loopdev=$(loopback_partscan "${image}")
+
     # TODO(jimhebert): Perform the kernel security tests on both the kernel
     #                  partitions. Here, we just run it on kernel partition 4
     #                  which is the install kernel on the recovery image.
     #                  crosbug.com/24274
-    extract_image_partition "$image" 4 "$kernelblob"
+    local loop_kern="${loopdev}p4"
     local rootfs=$(make_temp_dir)
-    mount_image_partition_ro "$image" 3 "$rootfs"
+    mount_loop_image_partition_ro "${loopdev}" 3 "${rootfs}"
 
-    # Pick the right set of test-expectation data to use. The cuts
-    # turn e.g. x86-foo as a well as x86-foo-pvtkeys into x86_foo.
-    local board=$(grep CHROMEOS_RELEASE_BOARD= "$rootfs/etc/lsb-release" | \
-                  cut -d = -f 2 | cut -d - -f 1,2 --output-delimiter=_)
-    eval "required_kparams=(\"\${required_kparams_$board[@]}\")"
-    eval "required_kparams_regex=(\"\${required_kparams_regex_$board[@]}\")"
-    eval "optional_kparams=(\"\${optional_kparams_$board[@]}\")"
-    eval "optional_kparams_regex=(\"\${optional_kparams_regex_$board[@]}\")"
-    eval "required_dmparams=(\"\${required_dmparams_$board[@]}\")"
-    eval "required_dmparams_regex=(\"\${required_dmparams_regex_$board[@]}\")"
+    # Pick the right set of test-expectation data to use.
+    local boardvar=$(get_boardvar_from_lsb_release "${rootfs}")
+    eval "required_kparams=(\"\${required_kparams_${boardvar}[@]}\")"
+    eval "required_kparams_regex=(\"\${required_kparams_regex_${boardvar}[@]}\")"
+    eval "optional_kparams=(\"\${optional_kparams_${boardvar}[@]}\")"
+    eval "optional_kparams_regex=(\"\${optional_kparams_regex_${boardvar}[@]}\")"
+    eval "required_dmparams=(\"\${required_dmparams_${boardvar}[@]}\")"
+    eval "required_dmparams_regex=(\"\${required_dmparams_regex_${boardvar}[@]}\")"
     output+="required_kparams=(\n"
     output+="$(printf "\t'%s'\n" "${required_kparams[@]}")\n)\n"
     output+="required_kparams_regex=(\n"
@@ -122,7 +125,7 @@ main() {
     output+="$(printf "\t'%s'\n" "${required_dmparams_regex[@]}")\n)\n"
 
     # Divide the dm params from the rest and process seperately.
-    local kparams=$(dump_kernel_config "$kernelblob")
+    local kparams=$(sudo futility dump_kernel_config "${loop_kern}")
     local dmparams=$(get_dmparams "$kparams")
     local kparams_nodm=$(kparams_remove_dm "$kparams")
 
@@ -142,18 +145,30 @@ main() {
       fi
     done
 
+    local sedout
     for expected_dmparams in "${required_dmparams_regex[@]}"; do
-      if [[ -z $(echo "${mangled_dmparams}" | \
-           sed "s${M}^${expected_dmparams}\$${M}${M}") ]]; then
+      if ! sedout=$(echo "${mangled_dmparams}" | \
+                    sed "s${M}^${expected_dmparams}\$${M}${M}"); then
+        echo "INTERNAL ERROR from sed script: ${expected_dmparams}"
+        break
+      elif [[ -z "${sedout}" ]]; then
         testfail=0
         break
       fi
     done
 
     if [ $testfail -eq 1 ]; then
-        echo "Kernel dm= parameter does not match any expected values!"
-        echo "Actual:   $dmparams"
-        echo "Expected: ${required_dmparams[@]}"
+      echo "Kernel dm= parameter does not match any expected values!"
+      echo "Actual value:          ${dmparams}"
+      echo "Mangled testing value: ${mangled_dmparams}"
+      if [[ ${#required_dmparams[@]} -gt 0 ]]; then
+        echo "Expected -- only one need match:"
+        printf "  >>> %s\n" "${required_dmparams[@]}"
+      fi
+      if [[ ${#required_dmparams_regex[@]} -gt 0 ]]; then
+        echo "Expected (regex) -- only one need match:"
+        printf "  >>> %s\n" "${required_dmparams_regex[@]}"
+      fi
     fi
 
     # Ensure all other required params are present.
