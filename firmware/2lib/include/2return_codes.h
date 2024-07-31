@@ -1,10 +1,18 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-#ifndef VBOOT_2_RETURN_CODES_H_
-#define VBOOT_2_RETURN_CODES_H_
+#ifndef VBOOT_REFERENCE_2RETURN_CODES_H_
+#define VBOOT_REFERENCE_2RETURN_CODES_H_
+
+#include "2sysincludes.h"
+
+/*
+ * Functions which return an error all return this type.  This is a 32-bit
+ * value rather than an int so it's consistent across different architectures.
+ */
+typedef uint32_t vb2_error_t;
 
 /*
  * Return codes from verified boot functions.
@@ -16,7 +24,33 @@ enum vb2_return_code {
 	/* Success - no error */
 	VB2_SUCCESS = 0,
 
-	/*
+	/**********************************************************************
+	 * Requests to the caller that are not considered errors
+	 */
+	VB2_REQUEST = 0x1000,
+
+	/* Calling firmware requested shutdown */
+	VB2_REQUEST_SHUTDOWN = 0x1001,
+
+	/* Calling firmware needs to perform a reboot */
+	VB2_REQUEST_REBOOT = 0x1002,
+
+	/* Need EC to reboot to read-only code to switch RW slot */
+	VB2_REQUEST_REBOOT_EC_SWITCH_RW = 0x1003,
+
+	/* Need EC to reboot to read-only code */
+	VB2_REQUEST_REBOOT_EC_TO_RO = 0x1004,
+
+	/* Continue in the UI loop.  This is used in UI internal functions. */
+	VB2_REQUEST_UI_CONTINUE = 0x1005,
+
+	/* Break from the UI loop.  This is used in UI internal functions. */
+	VB2_REQUEST_UI_EXIT = 0x1006,
+
+	/* End of VB2_REQUEST_* */
+	VB2_REQUEST_END = 0x5000,
+
+	/**********************************************************************
 	 * All vboot2 error codes start at a large offset from zero, to reduce
 	 * the risk of overlap with other error codes (TPM, etc.).
 	 */
@@ -28,7 +62,7 @@ enum vb2_return_code {
 	/* Mock error for testing */
 	VB2_ERROR_MOCK,
 
-        /**********************************************************************
+	/**********************************************************************
 	 * SHA errors
 	 */
 	VB2_ERROR_SHA = VB2_ERROR_BASE + 0x010000,
@@ -45,7 +79,10 @@ enum vb2_return_code {
 	/* Digest size buffer too small in vb2_digest_finalize() */
 	VB2_ERROR_SHA_FINALIZE_DIGEST_SIZE,
 
-        /**********************************************************************
+	/* Hash mismatch in vb2_hash_verify() */
+	VB2_ERROR_SHA_MISMATCH,
+
+	/**********************************************************************
 	 * RSA errors
 	 */
 	VB2_ERROR_RSA = VB2_ERROR_BASE + 0x020000,
@@ -74,7 +111,7 @@ enum vb2_return_code {
 	/* Bad size calculation in vb2_check_padding() */
 	VB2_ERROR_RSA_PADDING_SIZE,
 
-        /**********************************************************************
+	/**********************************************************************
 	 * NV storage errors
 	 */
 	VB2_ERROR_NV = VB2_ERROR_BASE + 0x030000,
@@ -85,33 +122,115 @@ enum vb2_return_code {
 	/* Bad CRC in vb2_nv_check_crc() */
 	VB2_ERROR_NV_CRC,
 
-        /**********************************************************************
+	/* Read error in nvdata backend */
+	VB2_ERROR_NV_READ,
+
+	/* Write error in nvdata backend */
+	VB2_ERROR_NV_WRITE,
+
+	/**********************************************************************
 	 * Secure data storage errors
 	 */
 	VB2_ERROR_SECDATA = VB2_ERROR_BASE + 0x040000,
 
-	/* Bad CRC in vb2_secdata_check_crc() */
-	VB2_ERROR_SECDATA_CRC,
+	/* Bad CRC in vb2api_secdata_firmware_check() */
+	VB2_ERROR_SECDATA_FIRMWARE_CRC,
 
-	/* Bad struct version in vb2_secdata_init() */
-	VB2_ERROR_SECDATA_VERSION,
+	/* Bad struct version in vb2api_secdata_firmware_check() */
+	VB2_ERROR_SECDATA_FIRMWARE_VERSION,
 
-	/* Invalid param in vb2_secdata_get() */
-	VB2_ERROR_SECDATA_GET_PARAM,
+	/* Invalid param in vb2_secdata_firmware_get();
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_FIRMWARE_GET_PARAM,
 
-	/* Invalid param in vb2_secdata_set() */
-	VB2_ERROR_SECDATA_SET_PARAM,
+	/* Invalid param in vb2_secdata_firmware_set();
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_FIRMWARE_SET_PARAM,
 
-	/* Invalid flags passed to vb2_secdata_set() */
-	VB2_ERROR_SECDATA_SET_FLAGS,
+	/* Invalid flags passed to vb2_secdata_firmware_set();
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_FIRMWARE_SET_FLAGS,
 
-	/* Called vb2_secdata_get() with uninitialized secdata */
-	VB2_ERROR_SECDATA_GET_UNINITIALIZED,
+	/* Called vb2_secdata_firmware_get() with uninitialized secdata;
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_FIRMWARE_GET_UNINITIALIZED,
 
-	/* Called vb2_secdata_set() with uninitialized secdata */
-	VB2_ERROR_SECDATA_SET_UNINITIALIZED,
+	/* Called vb2_secdata_firmware_set() with uninitialized secdata;
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_FIRMWARE_SET_UNINITIALIZED,
 
-        /**********************************************************************
+	/* Bad CRC in vb2api_secdata_kernel_check() */
+	VB2_ERROR_SECDATA_KERNEL_CRC,
+
+	/* Bad struct version in vb2_secdata_kernel_init() */
+	VB2_ERROR_SECDATA_KERNEL_VERSION,
+
+	/* Bad uid in vb2_secdata_kernel_init() */
+	VB2_ERROR_SECDATA_KERNEL_UID,
+
+	/* Invalid param in vb2_secdata_kernel_get();
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_KERNEL_GET_PARAM,
+
+	/* Invalid param in vb2_secdata_kernel_set();
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_KERNEL_SET_PARAM,
+
+	/* Invalid flags passed to vb2_secdata_kernel_set();
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_KERNEL_SET_FLAGS,
+
+	/* Called vb2_secdata_kernel_get() with uninitialized secdata_kernel;
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_KERNEL_GET_UNINITIALIZED,
+
+	/* Called vb2_secdata_kernel_set() with uninitialized secdata_kernel;
+	   Deprecated with chromium:972956. */
+	VB2_ERROR_DEPRECATED_SECDATA_KERNEL_SET_UNINITIALIZED,
+
+	/* Bad size in vb2api_secdata_fwmp_check() */
+	VB2_ERROR_SECDATA_FWMP_SIZE,
+
+	/* Incomplete structure in vb2api_secdata_fwmp_check() */
+	VB2_ERROR_SECDATA_FWMP_INCOMPLETE,
+
+	/* Bad CRC in vb2api_secdata_fwmp_check() */
+	VB2_ERROR_SECDATA_FWMP_CRC,
+
+	/* Bad struct version in vb2_secdata_fwmp_check() */
+	VB2_ERROR_SECDATA_FWMP_VERSION,
+
+	/* Error reading secdata_firmware from storage backend */
+	VB2_ERROR_SECDATA_FIRMWARE_READ,
+
+	/* Error writing secdata_firmware to storage backend */
+	VB2_ERROR_SECDATA_FIRMWARE_WRITE,
+
+	/* Error locking secdata_firmware in storage backend */
+	VB2_ERROR_SECDATA_FIRMWARE_LOCK,
+
+	/* Error reading secdata_kernel from storage backend */
+	VB2_ERROR_SECDATA_KERNEL_READ,
+
+	/* Error writing secdata_kernel to storage backend */
+	VB2_ERROR_SECDATA_KERNEL_WRITE,
+
+	/* Error locking secdata_kernel in storage backend */
+	VB2_ERROR_SECDATA_KERNEL_LOCK,
+
+	/* Error reading secdata_fwmp from storage backend */
+	VB2_ERROR_SECDATA_FWMP_READ,
+
+	/* Bad buffer size to read vb2_secdata_kernel */
+	VB2_ERROR_SECDATA_KERNEL_BUFFER_SIZE,
+
+	/* Incomplete structure in vb2api_secdata_kernel_check() */
+	VB2_ERROR_SECDATA_KERNEL_INCOMPLETE,
+
+	/* Bad struct size in vb2_secdata_kernel */
+	VB2_ERROR_SECDATA_KERNEL_STRUCT_SIZE,
+
+	/**********************************************************************
 	 * Common code errors
 	 */
 	VB2_ERROR_COMMON = VB2_ERROR_BASE + 0x050000,
@@ -137,16 +256,16 @@ enum vb2_return_code {
 	/* Member data outside parent in vb2_verify_member_inside() */
 	VB2_ERROR_INSIDE_DATA_OUTSIDE,
 
-	/* Unsupported signature algorithm in vb2_unpack_key() */
+	/* Unsupported signature algorithm in vb2_unpack_key_buffer() */
 	VB2_ERROR_UNPACK_KEY_SIG_ALGORITHM,                      /* 0x150008 */
 
-	/* Bad key size in vb2_unpack_key() */
+	/* Bad key size in vb2_unpack_key_buffer() */
 	VB2_ERROR_UNPACK_KEY_SIZE,
 
-	/* Bad key alignment in vb2_unpack_key() */
+	/* Bad key alignment in vb2_unpack_key_buffer() */
 	VB2_ERROR_UNPACK_KEY_ALIGN,
 
-	/* Bad key array size in vb2_unpack_key() */
+	/* Bad key array size in vb2_unpack_key_buffer() */
 	VB2_ERROR_UNPACK_KEY_ARRAY_SIZE,
 
 	/* Bad algorithm in vb2_verify_data() */
@@ -170,7 +289,7 @@ enum vb2_return_code {
 	 */
 	VB2_ERROR_VDATA_DIGEST_SIZE,
 
-	/* Unsupported hash algorithm in vb2_unpack_key() */
+	/* Unsupported hash algorithm in vb2_unpack_key_buffer() */
 	VB2_ERROR_UNPACK_KEY_HASH_ALGORITHM,
 
 	/* Member data overlaps member header */
@@ -182,7 +301,7 @@ enum vb2_return_code {
 	/*
 	 * Buffer too small for total, fixed size, or description reported in
 	 * common header, or member data checked via
-	 * vb2_verify_common_member().
+	 * vb21_verify_common_member().
 	 */
 	VB2_ERROR_COMMON_TOTAL_SIZE,
 	VB2_ERROR_COMMON_FIXED_SIZE,
@@ -232,10 +351,13 @@ enum vb2_return_code {
 	/* Key algorithm doesn't match signature algorithm */
 	VB2_ERROR_VDATA_ALGORITHM_MISMATCH,
 
-	/* Bad magic number in vb2_unpack_key() */
+	/* Bad magic number in vb2_unpack_key_buffer() */
 	VB2_ERROR_UNPACK_KEY_MAGIC,
 
-        /**********************************************************************
+	/* Null public key buffer passed to vb2_unpack_key_buffer() */
+	VB2_ERROR_UNPACK_KEY_BUFFER,
+
+	/**********************************************************************
 	 * Keyblock verification errors (all in vb2_verify_keyblock())
 	 */
 	VB2_ERROR_KEYBLOCK = VB2_ERROR_BASE + 0x060000,
@@ -273,10 +395,13 @@ enum vb2_return_code {
 	/* Signature signed wrong amount of data */
 	VB2_ERROR_KEYBLOCK_SIGNED_SIZE,
 
-	/* No signature matching key GUID */
-	VB2_ERROR_KEYBLOCK_SIG_GUID,
+	/* No signature matching key ID */
+	VB2_ERROR_KEYBLOCK_SIG_ID,
 
-        /**********************************************************************
+	/* Invalid keyblock hash in dev mode (self-signed kernel) */
+	VB2_ERROR_KEYBLOCK_HASH_INVALID_IN_DEV_MODE,
+
+	/**********************************************************************
 	 * Preamble verification errors (all in vb2_verify_preamble())
 	 */
 	VB2_ERROR_PREAMBLE = VB2_ERROR_BASE + 0x070000,
@@ -317,71 +442,193 @@ enum vb2_return_code {
 	/* Hash is signed */
 	VB2_ERROR_PREAMBLE_HASH_SIGNED,
 
-        /**********************************************************************
+	/* Bootloader outside signed portion of body */
+	VB2_ERROR_PREAMBLE_BOOTLOADER_OUTSIDE,
+
+	/* Vmlinuz header outside signed portion of body */
+	VB2_ERROR_PREAMBLE_VMLINUZ_HEADER_OUTSIDE,
+
+	/**********************************************************************
 	 * Misc higher-level code errors
 	 */
 	VB2_ERROR_MISC = VB2_ERROR_BASE + 0x080000,
 
-	/* Work buffer too small in vb2_init_context() */
-	VB2_ERROR_INITCTX_WORKBUF_SMALL,
+	/* Work buffer too small (see vb2api_init and vb2api_reinit) */
+	VB2_ERROR_WORKBUF_SMALL = 0x10080001,
 
-	/* Work buffer unaligned in vb2_init_context() */
-	VB2_ERROR_INITCTX_WORKBUF_ALIGN,
+	/* Work buffer unaligned (see vb2api_init and vb2api_reinit) */
+	VB2_ERROR_WORKBUF_ALIGN = 0x10080002,
 
-	/* Work buffer too small in vb2_fw_parse_gbb() */
-	VB2_ERROR_GBB_WORKBUF,
+	/* Work buffer too small in GBB-related function */
+	VB2_ERROR_GBB_WORKBUF = 0x10080003,
 
 	/* Bad magic number in vb2_read_gbb_header() */
-	VB2_ERROR_GBB_MAGIC,
+	VB2_ERROR_GBB_MAGIC = 0x10080004,
 
 	/* Incompatible version in vb2_read_gbb_header() */
-	VB2_ERROR_GBB_VERSION,
+	VB2_ERROR_GBB_VERSION = 0x10080005,
 
 	/* Old version in vb2_read_gbb_header() */
-	VB2_ERROR_GBB_TOO_OLD,
+	VB2_ERROR_GBB_TOO_OLD = 0x10080006,
 
 	/* Header size too small in vb2_read_gbb_header() */
-	VB2_ERROR_GBB_HEADER_SIZE,
+	VB2_ERROR_GBB_HEADER_SIZE = 0x10080007,
 
 	/* Work buffer too small for root key in vb2_load_fw_keyblock() */
-	VB2_ERROR_FW_KEYBLOCK_WORKBUF_ROOT_KEY,
+	VB2_ERROR_FW_KEYBLOCK_WORKBUF_ROOT_KEY = 0x10080008,
 
 	/* Work buffer too small for header in vb2_load_fw_keyblock() */
-	VB2_ERROR_FW_KEYBLOCK_WORKBUF_HEADER,
+	VB2_ERROR_FW_KEYBLOCK_WORKBUF_HEADER = 0x10080009,
 
 	/* Work buffer too small for keyblock in vb2_load_fw_keyblock() */
-	VB2_ERROR_FW_KEYBLOCK_WORKBUF,
+	VB2_ERROR_FW_KEYBLOCK_WORKBUF = 0x1008000a,
 
 	/* Keyblock version out of range in vb2_load_fw_keyblock() */
-	VB2_ERROR_FW_KEYBLOCK_VERSION_RANGE,
+	VB2_ERROR_FW_KEYBLOCK_VERSION_RANGE = 0x1008000b,
 
 	/* Keyblock version rollback in vb2_load_fw_keyblock() */
-	VB2_ERROR_FW_KEYBLOCK_VERSION_ROLLBACK,
+	VB2_ERROR_FW_KEYBLOCK_VERSION_ROLLBACK = 0x1008000c,
 
 	/* Missing firmware data key in vb2_load_fw_preamble() */
-	VB2_ERROR_FW_PREAMBLE2_DATA_KEY,
+	VB2_ERROR_FW_PREAMBLE2_DATA_KEY = 0x1008000d,
 
 	/* Work buffer too small for header in vb2_load_fw_preamble() */
-	VB2_ERROR_FW_PREAMBLE2_WORKBUF_HEADER,
+	VB2_ERROR_FW_PREAMBLE2_WORKBUF_HEADER = 0x1008000e,
 
 	/* Work buffer too small for preamble in vb2_load_fw_preamble() */
-	VB2_ERROR_FW_PREAMBLE2_WORKBUF,
+	VB2_ERROR_FW_PREAMBLE2_WORKBUF = 0x1008000f,
 
 	/* Firmware version out of range in vb2_load_fw_preamble() */
-	VB2_ERROR_FW_PREAMBLE_VERSION_RANGE,
+	VB2_ERROR_FW_PREAMBLE_VERSION_RANGE = 0x10080010,
 
 	/* Firmware version rollback in vb2_load_fw_preamble() */
-	VB2_ERROR_FW_PREAMBLE_VERSION_ROLLBACK,
+	VB2_ERROR_FW_PREAMBLE_VERSION_ROLLBACK = 0x10080011,
 
 	/* Not enough space in work buffer for resource object */
-	VB2_ERROR_READ_RESOURCE_OBJECT_BUF,
+	VB2_ERROR_READ_RESOURCE_OBJECT_BUF = 0x10080012,
 
-        /**********************************************************************
+	/* Work buffer too small for header in vb2_load_kernel_keyblock() */
+	VB2_ERROR_KERNEL_KEYBLOCK_WORKBUF_HEADER = 0x10080013,
+
+	/* Work buffer too small for keyblock in vb2_load_kernel_keyblock() */
+	VB2_ERROR_KERNEL_KEYBLOCK_WORKBUF = 0x10080014,
+
+	/* Keyblock version out of range in vb2_load_kernel_keyblock() */
+	VB2_ERROR_KERNEL_KEYBLOCK_VERSION_RANGE = 0x10080015,
+
+	/* Keyblock version rollback in vb2_load_kernel_keyblock() */
+	VB2_ERROR_KERNEL_KEYBLOCK_VERSION_ROLLBACK = 0x10080016,
+
+	/*
+	 * Keyblock flags don't match current mode in
+	 * vb2_load_kernel_keyblock().
+	 */
+	VB2_ERROR_KERNEL_KEYBLOCK_DEV_FLAG = 0x10080017,
+	VB2_ERROR_KERNEL_KEYBLOCK_REC_FLAG = 0x10080018,
+
+	/* Missing firmware data key in vb2_load_kernel_preamble() */
+	VB2_ERROR_KERNEL_PREAMBLE2_DATA_KEY = 0x10080019,
+
+	/* Work buffer too small for header in vb2_load_kernel_preamble() */
+	VB2_ERROR_KERNEL_PREAMBLE2_WORKBUF_HEADER = 0x1008001a,
+
+	/* Work buffer too small for preamble in vb2_load_kernel_preamble() */
+	VB2_ERROR_KERNEL_PREAMBLE2_WORKBUF = 0x1008001b,
+
+	/* Kernel version out of range in vb2_load_kernel_preamble() */
+	VB2_ERROR_KERNEL_PREAMBLE_VERSION_RANGE = 0x1008001c,
+
+	/* Kernel version rollback in vb2_load_kernel_preamble() */
+	VB2_ERROR_KERNEL_PREAMBLE_VERSION_ROLLBACK = 0x1008001d,
+
+	/* Kernel preamble not loaded before calling vb2api_get_kernel_size() */
+	VB2_ERROR_API_GET_KERNEL_SIZE_PREAMBLE = 0x1008001e,
+
+	/* Unable to unpack kernel subkey in vb2_verify_vblock();
+	 * deprecated and replaced with VB2_ERROR_UNPACK_KEY_* */
+	VB2_ERROR_DEPRECATED_VBLOCK_KERNEL_SUBKEY = 0x1008001f,
+
+	/*
+	 * Got a self-signed kernel in vb2_verify_vblock(), but need an
+	 * officially signed one; deprecated and replaced with
+	 * VB2_ERROR_KERNEL_KEYBLOCK_*.
+	 */
+	VB2_ERROR_DEPRECATED_VBLOCK_SELF_SIGNED = 0x10080020,
+
+	/* Invalid keyblock hash in vb2_verify_vblock();
+	 * deprecated and replaced with VB2_ERROR_KERNEL_KEYBLOCK_* */
+	VB2_ERROR_DEPRECATED_VBLOCK_KEYBLOCK_HASH = 0x10080021,
+
+	/* Invalid keyblock in vb2_verify_vblock();
+	 * deprecated and replaced with VB2_ERROR_KERNEL_KEYBLOCK_* */
+	VB2_ERROR_DEPRECATED_VBLOCK_KEYBLOCK = 0x10080022,
+
+	/* Wrong dev key hash in vb2_verify_kernel_vblock_dev_key_hash() */
+	VB2_ERROR_KERNEL_KEYBLOCK_DEV_KEY_HASH = 0x10080023,
+
+	/* Work buffer too small in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_WORKBUF = 0x10080024,
+
+	/* Unable to read vblock in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_READ_VBLOCK = 0x10080025,
+
+	/* Unable to verify vblock in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_VERIFY_VBLOCK = 0x10080026,
+
+	/* Kernel body offset too large in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_BODY_OFFSET = 0x10080027,
+
+	/* Kernel body too big in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_BODY_SIZE = 0x10080028,
+
+	/* Unable to read kernel body in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_READ_BODY = 0x10080029,
+
+	/* Unable to unpack data key in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_DATA_KEY = 0x1008002a,
+
+	/* Unable to verify body in vb2_load_partition() */
+	VB2_ERROR_LOAD_PARTITION_VERIFY_BODY = 0x1008002b,
+
+	/* Unable to get EC image hash in ec_sync_phase1() */
+	VB2_ERROR_EC_HASH_IMAGE = 0x1008002c,
+
+	/* Unable to get expected EC image hash in ec_sync_phase1() */
+	VB2_ERROR_EC_HASH_EXPECTED = 0x1008002d,
+
+	/* Expected and image hashes are different size in ec_sync_phase1() */
+	VB2_ERROR_EC_HASH_SIZE = 0x1008002e,
+
+	/* Incompatible version for vb2_shared_data structure being loaded */
+	VB2_ERROR_SHARED_DATA_VERSION = 0x1008002f,
+
+	/* Bad magic number in vb2_shared_data structure */
+	VB2_ERROR_SHARED_DATA_MAGIC = 0x10080030,
+
+	/* Some part of GBB data is invalid */
+	VB2_ERROR_GBB_INVALID = 0x10080031,
+
+	/* Invalid parameter */
+	VB2_ERROR_INVALID_PARAMETER = 0x10080032,
+
+	/* Problem with workbuf validity (see vb2api_init and vb2api_reinit) */
+	VB2_ERROR_WORKBUF_INVALID = 0x10080033,
+
+	/* Escape from NO_BOOT mode is detected */
+	VB2_ERROR_ESCAPE_NO_BOOT = 0x10080034,
+
+	/*
+	 * Keyblock flags don't match current mode in
+	 * vb2_load_kernel_keyblock().
+	 */
+	VB2_ERROR_KERNEL_KEYBLOCK_MINIOS_FLAG = 0x10080035,
+
+	/**********************************************************************
 	 * API-level errors
 	 */
 	VB2_ERROR_API = VB2_ERROR_BASE + 0x090000,
 
-	/* Bag tag in vb2api_init_hash() */
+	/* Bad tag in vb2api_init_hash() */
 	VB2_ERROR_API_INIT_HASH_TAG,
 
 	/* Preamble not present in vb2api_init_hash() */
@@ -411,22 +658,22 @@ enum vb2_return_code {
 	/* Work buffer too small in vb2api_check_hash() */
 	VB2_ERROR_API_CHECK_HASH_WORKBUF_DIGEST,
 
-	/* Bag tag in vb2api_check_hash() */
+	/* Bad tag in vb2api_check_hash() */
 	VB2_ERROR_API_CHECK_HASH_TAG,
 
 	/* Missing firmware data key in vb2api_check_hash() */
 	VB2_ERROR_API_CHECK_HASH_DATA_KEY,
 
-	/* Siganature size mismatch in vb2api_check_hash() */
+	/* Signature size mismatch in vb2api_check_hash() */
 	VB2_ERROR_API_CHECK_HASH_SIG_SIZE,
 
 	/* Phase one needs recovery mode */
 	VB2_ERROR_API_PHASE1_RECOVERY,
 
-	/* Bag tag in vb2api_check_hash() */
-	VB2_ERROR_API_INIT_HASH_GUID,
+	/* Bad tag in vb2api_check_hash() */
+	VB2_ERROR_API_INIT_HASH_ID,
 
-	/* Siganature mismatch in vb2api_check_hash() */
+	/* Signature mismatch in vb2api_check_hash() */
 	VB2_ERROR_API_CHECK_HASH_SIG,
 
 	/* Invalid enum vb2_pcr_digest requested to vb2api_get_pcr_digest */
@@ -435,7 +682,41 @@ enum vb2_return_code {
 	/* Buffer size for the digest is too small for vb2api_get_pcr_digest */
 	VB2_ERROR_API_PCR_DIGEST_BUF,
 
-        /**********************************************************************
+	/* Work buffer too small for recovery key in vb2api_kernel_phase1();
+	 * Deprecated: use vb2_gbb_read_recovery_key return values */
+	VB2_ERROR_DEPRECATED_API_KPHASE1_WORKBUF_REC_KEY,
+
+	/* Firmware preamble not present for vb2api_kernel_phase1() */
+	VB2_ERROR_API_KPHASE1_PREAMBLE,
+
+	/* Wrong amount of kernel data in vb2api_verify_kernel_data() */
+	VB2_ERROR_API_VERIFY_KDATA_SIZE,
+
+	/* Kernel preamble not present for vb2api_verify_kernel_data() */
+	VB2_ERROR_API_VERIFY_KDATA_PREAMBLE,
+
+	/* Insufficient workbuf for hashing in vb2api_verify_kernel_data() */
+	VB2_ERROR_API_VERIFY_KDATA_WORKBUF,
+
+	/* Bad data key in vb2api_verify_kernel_data() */
+	VB2_ERROR_API_VERIFY_KDATA_KEY,
+
+	/* Phase one passing through secdata's request to reboot */
+	VB2_ERROR_API_PHASE1_SECDATA_REBOOT,
+
+	/* Digest buffer passed into vb2api_check_hash incorrect. */
+	VB2_ERROR_API_CHECK_DIGEST_SIZE,
+
+	/* Disabling developer mode is not allowed by GBB flags */
+	VB2_ERROR_API_DISABLE_DEV_NOT_ALLOWED,
+
+	/* Enabling developer mode is not allowed in non-recovery mode */
+	VB2_ERROR_API_ENABLE_DEV_NOT_ALLOWED,
+
+	/* Failed to select next slot in vb2_select_fw_slot() */
+	VB2_ERROR_API_NEXT_SLOT_UNAVAILABLE,
+
+	/**********************************************************************
 	 * Errors which may be generated by implementations of vb2ex functions.
 	 * Implementation may also return its own specific errors, which should
 	 * NOT be in the range VB2_ERROR_BASE...VB2_ERROR_MAX to avoid
@@ -443,8 +724,9 @@ enum vb2_return_code {
 	 */
 	VB2_ERROR_EX = VB2_ERROR_BASE + 0x0a0000,
 
-	/* Read resource not implemented */
-	VB2_ERROR_EX_READ_RESOURCE_UNIMPLEMENTED,
+	/* Read resource not implemented
+	 * Deprecated: use VB2_ERROR_EX_UNIMPLEMENTED (chromium:944804) */
+	VB2_ERROR_EX_DEPRECATED_READ_RESOURCE_UNIMPLEMENTED,
 
 	/* Resource index not found */
 	VB2_ERROR_EX_READ_RESOURCE_INDEX,
@@ -455,19 +737,90 @@ enum vb2_return_code {
 	/* TPM clear owner failed */
 	VB2_ERROR_EX_TPM_CLEAR_OWNER,
 
-	/* TPM clear owner not implemented */
-	VB2_ERROR_EX_TPM_CLEAR_OWNER_UNIMPLEMENTED,
+	/* TPM clear owner not implemented
+	 * Deprecated: use VB2_ERROR_EX_UNIMPLEMENTED (chromium:944804) */
+	VB2_ERROR_DEPRECATED_EX_TPM_CLEAR_OWNER_UNIMPLEMENTED,
 
 	/* Hardware crypto engine doesn't support this algorithm (non-fatal) */
 	VB2_ERROR_EX_HWCRYPTO_UNSUPPORTED,
 
+	/* TPM does not understand this command */
+	VB2_ERROR_EX_TPM_NO_SUCH_COMMAND,
 
-        /**********************************************************************
+	/* vb2ex function is unimplemented (stubbed in 2lib/2stub.c) */
+	VB2_ERROR_EX_UNIMPLEMENTED,
+
+	/* AUXFW peripheral busy. Cannot upgrade firmware at present. */
+	VB2_ERROR_EX_AUXFW_PERIPHERAL_BUSY,
+
+	/* Error setting vendor data (see: VbExSetVendorData).
+	 * Deprecated: functionality removed with legacy UI (b/167643628) */
+	VB2_ERROR_DEPRECATED_EX_SET_VENDOR_DATA,
+
+	/* The memory test is running but the output buffer was unchanged.
+	   Deprecated with b/172339016. */
+	VB2_ERROR_DEPRECATED_EX_DIAG_TEST_RUNNING,
+
+	/* The memory test is running and the output buffer was updated.
+	   Deprecated with b/172339016. */
+	VB2_ERROR_DEPRECATED_EX_DIAG_TEST_UPDATED,
+
+	/* The memory test initialization failed.
+	   Deprecated with b/172339016. */
+	VB2_ERROR_DEPRECATED_EX_DIAG_TEST_INIT_FAILED,
+
+	/**********************************************************************
+	 * Kernel loading errors
+	 *
+	 * Should be ordered by specificity -- lower number means more specific.
+	 */
+	VB2_ERROR_LK = 0x100b0000,
+
+	/* Only an invalid kernel was found in vb2api_load_kernel() */
+	VB2_ERROR_LK_INVALID_KERNEL_FOUND = 0x100b1000,
+
+	/* No kernel partitions were found in vb2api_load_kernel() */
+	VB2_ERROR_LK_NO_KERNEL_FOUND = 0x100b2000,
+
+	/* No working block devices were found */
+	VB2_ERROR_LK_NO_DISK_FOUND = 0x100b3000,
+
+	/**********************************************************************
+	 * UI errors
+	 */
+	VB2_ERROR_UI = 0x100c0000,
+
+	/* Display initialization failed */
+	VB2_ERROR_UI_DISPLAY_INIT = 0x100c0001,
+
+	/* Problem finding screen entry or its draw function */
+	VB2_ERROR_UI_INVALID_SCREEN = 0x100c0002,
+
+	/* Screen drawing failed, including all CBGFX_ERROR_* errors returned
+	   from libpayload */
+	VB2_ERROR_UI_DRAW_FAILURE = 0x100c0003,
+
+	/* Problem loading archive from CBFS */
+	VB2_ERROR_UI_INVALID_ARCHIVE = 0x100c0004,
+
+	/* Image not found in the archive */
+	VB2_ERROR_UI_MISSING_IMAGE = 0x100c0005,
+
+	/* Requested locale not available */
+	VB2_ERROR_UI_INVALID_LOCALE = 0x100c0006,
+
+	/* Memory allocation failure */
+	VB2_ERROR_UI_MEMORY_ALLOC = 0x100c0007,
+
+	/* Log screen initialization failed */
+	VB2_ERROR_UI_LOG_INIT = 0x100c0008,
+
+	/**********************************************************************
 	 * Errors generated by host library (non-firmware) start here.
 	 */
 	VB2_ERROR_HOST_BASE = 0x20000000,
 
-        /**********************************************************************
+	/**********************************************************************
 	 * Errors generated by host library misc functions
 	 */
 	VB2_ERROR_HOST_MISC = VB2_ERROR_HOST_BASE + 0x010000,
@@ -490,13 +843,16 @@ enum vb2_return_code {
 	/* Unable to write data in write_file() */
 	VB2_ERROR_WRITE_FILE_DATA,
 
-	/* Unable to convert string to struct vb_guid */
-	VB2_ERROR_STR_TO_GUID,
+	/* Unable to convert string to struct vb_id */
+	VB2_ERROR_STR_TO_ID,
 
-	/* Unable to convert struct vb_guid to string */
-	VB2_ERROR_GUID_TO_STR,
+	/* Flashrom exited with failure status */
+	VB2_ERROR_FLASHROM,
 
-        /**********************************************************************
+	/* cbfstool exited with failure status */
+	VB2_ERROR_CBFSTOOL,
+
+	/**********************************************************************
 	 * Errors generated by host library key functions
 	 */
 	VB2_ERROR_HOST_KEY = VB2_ERROR_HOST_BASE + 0x020000,
@@ -582,7 +938,22 @@ enum vb2_return_code {
 	/* Bad hash algorithm in vb2_public_key_hash() */
 	VB2_ERROR_PUBLIC_KEY_HASH,
 
-        /**********************************************************************
+	/* Bad key size in vb2_copy_packed_key() */
+	VB2_ERROR_COPY_KEY_SIZE,
+
+	/* Unable to convert back to vb1 crypto algorithm */
+	VB2_ERROR_VB1_CRYPTO_ALGORITHM,
+
+	/* Unable to allocate packed key */
+	VB2_ERROR_PACKED_KEY_ALLOC,
+
+	/* Unable to copy packed key */
+	VB2_ERROR_PACKED_KEY_COPY,
+
+	/* Packed key with invalid version */
+	VB2_ERROR_PACKED_KEY_VERSION,
+
+	/**********************************************************************
 	 * Errors generated by host library signature functions
 	 */
 	VB2_ERROR_HOST_SIG = VB2_ERROR_HOST_BASE + 0x030000,
@@ -623,7 +994,7 @@ enum vb2_return_code {
 	/* Not enough buffer space to hold signature in vb2_sign_object() */
 	VB2_SIGN_OBJECT_OVERFLOW,
 
-        /**********************************************************************
+	/**********************************************************************
 	 * Errors generated by host library keyblock functions
 	 */
 	VB2_ERROR_HOST_KEYBLOCK = VB2_ERROR_HOST_BASE + 0x040000,
@@ -640,7 +1011,7 @@ enum vb2_return_code {
 	/* Unable to sign keyblock in vb2_create_keyblock() */
 	VB2_KEYBLOCK_CREATE_SIGN,
 
-        /**********************************************************************
+	/**********************************************************************
 	 * Errors generated by host library firmware preamble functions
 	 */
 	VB2_ERROR_HOST_FW_PREAMBLE = VB2_ERROR_HOST_BASE + 0x050000,
@@ -654,7 +1025,15 @@ enum vb2_return_code {
 	/* Unable to sign preamble in vb2_create_fw_preamble() */
 	VB2_FW_PREAMBLE_CREATE_SIGN,
 
-        /**********************************************************************
+	/**********************************************************************
+	 * Errors generated by unit test functions
+	 */
+	VB2_ERROR_UNIT_TEST = VB2_ERROR_HOST_BASE + 0x060000,
+
+	/* Unable to open an input file needed for a unit test */
+	VB2_ERROR_TEST_INPUT_FILE,
+
+	/**********************************************************************
 	 * Highest non-zero error generated inside vboot library.  Note that
 	 * error codes passed through vboot when it calls external APIs may
 	 * still be outside this range.
@@ -662,4 +1041,4 @@ enum vb2_return_code {
 	VB2_ERROR_MAX = VB2_ERROR_BASE + 0x1fffffff,
 };
 
-#endif  /* VBOOT_2_RETURN_CODES_H_ */
+#endif  /* VBOOT_REFERENCE_2RETURN_CODES_H_ */

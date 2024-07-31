@@ -1,16 +1,19 @@
 #!/bin/sh
 #
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
 # Note: This file must be written in dash compatible way as scripts that use
 # this may run in the Chrome OS client enviornment.
 
+# shellcheck disable=SC2039,SC2059,SC2155
+
 # Determine script directory
-SCRIPT_DIR=$(dirname $0)
-PROG=$(basename $0)
-GPT=${GPT:-"cgpt"}
+SCRIPT_DIR=$(dirname "$0")
+PROG=$(basename "$0")
+: "${GPT:=cgpt}"
+: "${FUTILITY:=futility}"
 
 # The tag when the rootfs is changed.
 TAG_NEEDS_TO_BE_SIGNED="/root/.need_to_be_signed"
@@ -23,8 +26,10 @@ TEMP_DIR_LIST=$(mktemp)
 load_shflags() {
   # Load shflags
   if [ -f /usr/share/misc/shflags ]; then
+    # shellcheck disable=SC1090,SC1091
     .  /usr/share/misc/shflags
   elif [ -f "${SCRIPT_DIR}/lib/shflags/shflags" ]; then
+    # shellcheck disable=SC1090
     . "${SCRIPT_DIR}/lib/shflags/shflags"
   else
     echo "ERROR: Cannot find the required shflags library."
@@ -38,10 +43,24 @@ load_shflags() {
 # Functions for debug output
 # ----------------------------------------------------------------------------
 
+# These helpers are for runtime systems.  For scripts using common.sh,
+# they'll get better definitions that will clobber these ones.
+info() {
+  echo "${PROG}: INFO: $*" >&2
+}
+
+warn() {
+  echo "${PROG}: WARN: $*" >&2
+}
+
+error() {
+  echo "${PROG}: ERROR: $*" >&2
+}
+
 # Reports error message and exit(1)
 # Args: error message
-err_die() {
-  echo "ERROR: $*" 1>&2
+die() {
+  error "$@"
   exit 1
 }
 
@@ -69,9 +88,9 @@ debug_msg() {
 # Create a new temporary file and return its name.
 # File is automatically cleaned when cleanup_temps_and_mounts() is called.
 make_temp_file() {
-  local tempfile=$(mktemp)
-  echo "$tempfile" >> $TEMP_FILE_LIST
-  echo $tempfile
+  local tempfile="$(mktemp)"
+  echo "$tempfile" >> "$TEMP_FILE_LIST"
+  echo "$tempfile"
 }
 
 # Create a new temporary directory and return its name.
@@ -79,26 +98,27 @@ make_temp_file() {
 # when cleanup_temps_and_mounts() is called.
 make_temp_dir() {
   local tempdir=$(mktemp -d)
-  echo "$tempdir" >> $TEMP_DIR_LIST
-  echo $tempdir
+  echo "$tempdir" >> "$TEMP_DIR_LIST"
+  echo "$tempdir"
 }
 
 cleanup_temps_and_mounts() {
-  for i in $(cat $TEMP_FILE_LIST); do
-    rm -f $i
-  done
+  while read -r line; do
+    rm -f "$line"
+  done < "$TEMP_FILE_LIST"
+
   set +e  # umount may fail for unmounted directories
-  for i in $(cat $TEMP_DIR_LIST); do
-    if [ -n "$i" ]; then
-      if has_needs_to_be_resigned_tag "$i"; then
+  while read -r line; do
+    if [ -n "$line" ]; then
+      if has_needs_to_be_resigned_tag "$line"; then
         echo "Warning: image may be modified. Please resign image."
       fi
-      sudo umount $i 2>/dev/null
-      rm -rf $i
+      sudo umount "$line" 2>/dev/null
+      rm -rf "$line"
     fi
-  done
+  done < "$TEMP_DIR_LIST"
   set -e
-  rm -rf $TEMP_DIR_LIST $TEMP_FILE_LIST
+  rm -rf "$TEMP_DIR_LIST" "$TEMP_FILE_LIST"
 }
 
 trap "cleanup_temps_and_mounts" EXIT
@@ -122,18 +142,32 @@ make_partition_dev() {
   fi
 }
 
+# Find the block size of a device in bytes
+# Args: DEVICE (e.g. /dev/sda)
+# Return: block size in bytes
+blocksize() {
+  local output=''
+  local path="$1"
+  if [ -b "${path}" ]; then
+    local dev="${path##*/}"
+    local sys="/sys/block/${dev}/queue/logical_block_size"
+    output="$(cat "${sys}" 2>/dev/null)"
+  fi
+  echo "${output:-512}"
+}
+
 # Read GPT table to find the starting location of a specific partition.
 # Args: DEVICE PARTNUM
 # Returns: offset (in sectors) of partition PARTNUM
 partoffset() {
-  sudo $GPT show -b -i $2 $1
+  sudo "$GPT" show -b -i "$2" "$1"
 }
 
 # Read GPT table to find the size of a specific partition.
 # Args: DEVICE PARTNUM
 # Returns: size (in sectors) of partition PARTNUM
 partsize() {
-  sudo $GPT show -s -i $2 $1
+  sudo "$GPT" show -s -i "$2" "$1"
 }
 
 # Tags a file system as "needs to be resigned".
@@ -162,20 +196,20 @@ is_rootfs_partition() {
 # If the kernel is buggy and is unable to loop+mount quickly,
 # retry the operation a few times.
 # Args: IMAGE PARTNUM MOUNTDIRECTORY [ro]
+#
+# This function does not check whether the partition is allowed to be mounted as
+# RW.  Callers must ensure the partition can be mounted as RW before calling
+# this function without |ro| argument.
 _mount_image_partition_retry() {
   local image=$1
   local partnum=$2
   local mount_dir=$3
   local ro=$4
-  local offset=$(( $(partoffset "$image" "$partnum") * 512 ))
+  local bs="$(blocksize "${image}")"
+  local offset=$(( $(partoffset "${image}" "${partnum}") * bs ))
   local out try
 
-  if [ "$ro" != "ro" ]; then
-    # Forcibly call enable_rw_mount.  It should fail on unsupported
-    # filesystems and be idempotent on ext*.
-    enable_rw_mount "$image" ${offset} 2> /dev/null
-  fi
-
+  # shellcheck disable=SC2086
   set -- sudo LC_ALL=C mount -o loop,offset=${offset},${ro} \
     "${image}" "${mount_dir}"
   try=1
@@ -204,20 +238,101 @@ _mount_image_partition_retry() {
   return 1
 }
 
+# If called without 'ro', make sure the partition is allowed to be mounted as
+# 'rw' before actually mounting it.
+# Args: IMAGE PARTNUM MOUNTDIRECTORY [ro]
+_mount_image_partition() {
+  local image=$1
+  local partnum=$2
+  local mount_dir=$3
+  local ro=$4
+  local bs="$(blocksize "${image}")"
+  local offset=$(( $(partoffset "${image}" "${partnum}") * bs ))
+
+  if [ "$ro" != "ro" ]; then
+    # Forcibly call enable_rw_mount.  It should fail on unsupported
+    # filesystems and be idempotent on ext*.
+    enable_rw_mount "${image}" ${offset} 2> /dev/null
+  fi
+
+  _mount_image_partition_retry "$@"
+}
+
+# If called without 'ro', make sure the partition is allowed to be mounted as
+# 'rw' before actually mounting it.
+# Args: LOOPDEV PARTNUM MOUNTDIRECTORY [ro]
+_mount_loop_image_partition() {
+  local loopdev=$1
+  local partnum=$2
+  local mount_dir=$3
+  local ro=$4
+  local loop_rootfs="${loopdev}p${partnum}"
+
+  if [ "$ro" != "ro" ]; then
+    # Forcibly call enable_rw_mount.  It should fail on unsupported
+    # filesystems and be idempotent on ext*.
+    enable_rw_mount "${loop_rootfs}" 2>/dev/null
+  fi
+
+  sudo mount -o "${ro}" "${loop_rootfs}" "${mount_dir}"
+}
+
 # Mount a partition read-only from an image into a local directory
 # Args: IMAGE PARTNUM MOUNTDIRECTORY
 mount_image_partition_ro() {
-  _mount_image_partition_retry "$@" "ro"
+  _mount_image_partition "$@" "ro"
+}
+
+# Mount a partition read-only from an image into a local directory
+# Args: LOOPDEV PARTNUM MOUNTDIRECTORY
+mount_loop_image_partition_ro() {
+  _mount_loop_image_partition "$@" "ro"
 }
 
 # Mount a partition from an image into a local directory
 # Args: IMAGE PARTNUM MOUNTDIRECTORY
 mount_image_partition() {
   local mount_dir=$3
-  _mount_image_partition_retry "$@"
-  if is_rootfs_partition "$mount_dir"; then
-    tag_as_needs_to_be_resigned "$mount_dir"
+  _mount_image_partition "$@"
+  if is_rootfs_partition "${mount_dir}"; then
+    tag_as_needs_to_be_resigned "${mount_dir}"
   fi
+}
+
+# Mount a partition from an image into a local directory
+# Args: LOOPDEV PARTNUM MOUNTDIRECTORY
+mount_loop_image_partition() {
+  local mount_dir=$3
+  _mount_loop_image_partition "$@"
+  if is_rootfs_partition "${mount_dir}"; then
+    tag_as_needs_to_be_resigned "${mount_dir}"
+  fi
+}
+
+# Mount the image's ESP (EFI System Partition) on a newly created temporary
+# directory.
+# Prints out the newly created temporary directory path if succeeded.
+# If the image doens't have an ESP partition, returns 0 without print anything.
+# Args: LOOPDEV
+# Returns: 0 if succeeded, 1 otherwise.
+mount_image_esp() {
+  local loopdev="$1"
+  local ESP_PARTNUM=12
+  local loop_esp="${loopdev}p${ESP_PARTNUM}"
+
+  local esp_offset=$(( $(partoffset "${loopdev}" "${ESP_PARTNUM}") ))
+  # Check if the image has an ESP partition.
+  if [[ "${esp_offset}" == "0" ]]; then
+    return 0
+  fi
+
+  local esp_dir="$(make_temp_dir)"
+  if ! sudo mount -o "${ro}" "${loop_esp}" "${esp_dir}"; then
+    return 1
+  fi
+
+  echo "${esp_dir}"
+  return 0
 }
 
 # Extract a partition to a file
@@ -228,7 +343,9 @@ extract_image_partition() {
   local output_file=$3
   local offset=$(partoffset "$image" "$partnum")
   local size=$(partsize "$image" "$partnum")
-  dd if=$image of=$output_file bs=512 skip=$offset count=$size \
+
+  # shellcheck disable=SC2086
+  dd if="$image" of="$output_file" bs=512 skip=$offset count=$size \
     conv=notrunc 2>/dev/null
 }
 
@@ -240,7 +357,9 @@ replace_image_partition() {
   local input_file=$3
   local offset=$(partoffset "$image" "$partnum")
   local size=$(partsize "$image" "$partnum")
-  dd if=$input_file of=$image bs=512 seek=$offset count=$size \
+
+  # shellcheck disable=SC2086
+  dd if="$input_file" of="$image" bs=512 seek=$offset count=$size \
     conv=notrunc 2>/dev/null
 }
 
@@ -250,6 +369,7 @@ enable_rw_mount() {
   local offset="${2-0}"
 
   # Make sure we're checking an ext2 image
+  # shellcheck disable=SC2086
   if ! is_ext2 "$rootfs" $offset; then
     echo "enable_rw_mount called on non-ext2 filesystem: $rootfs $offset" 1>&2
     return 1
@@ -285,6 +405,7 @@ disable_rw_mount() {
   local offset="${2-0}"
 
   # Make sure we're checking an ext2 image
+  # shellcheck disable=SC2086
   if ! is_ext2 "$rootfs" $offset; then
     echo "disable_rw_mount called on non-ext2 filesystem: $rootfs $offset" 1>&2
     return 1
@@ -304,6 +425,7 @@ rw_mount_disabled() {
   local offset="${2-0}"
 
   # Make sure we're checking an ext2 image
+  # shellcheck disable=SC2086
   if ! is_ext2 "$rootfs" $offset; then
     return 2
   fi
@@ -318,15 +440,61 @@ rw_mount_disabled() {
   return 1
 }
 
+# Functions for CBFS management
+# ----------------------------------------------------------------------------
+
+# Get the compression algorithm used for the given CBFS file.
+# Args: INPUT_CBFS_IMAGE CBFS_FILE_NAME
+get_cbfs_compression() {
+  cbfstool "$1" print -r "FW_MAIN_A" | awk -vname="$2" '$1 == name {print $5}'
+}
+
+# Store a file in CBFS.
+# Args: INPUT_CBFS_IMAGE INPUT_FILE CBFS_FILE_NAME
+store_file_in_cbfs() {
+  local image="$1"
+  local file="$2"
+  local name="$3"
+  local compression=$(get_cbfs_compression "$1" "${name}")
+
+  # Don't re-add a file to a section if it's unchanged.  Otherwise this seems
+  # to break signature of existing contents.  https://crbug.com/889716
+  if cbfstool "${image}" extract -r "FW_MAIN_A,FW_MAIN_B" \
+       -f "${file}.orig" -n "${name}"; then
+    if cmp -s "${file}" "${file}.orig"; then
+      rm -f "${file}.orig"
+      return
+    fi
+    rm -f "${file}.orig"
+  fi
+
+  cbfstool "${image}" remove -r "FW_MAIN_A,FW_MAIN_B" -n "${name}" || return
+  # This add can fail if
+  # 1. Size of a signature after compression is larger
+  # 2. CBFS is full
+  # These conditions extremely unlikely become true at the same time.
+  cbfstool "${image}" add -r "FW_MAIN_A,FW_MAIN_B" -t "raw" \
+    -c "${compression}" -f "${file}" -n "${name}" || return
+}
+
 # Misc functions
 # ----------------------------------------------------------------------------
+
+# Parses the version file containing key=value lines
+# Args: key file
+# Returns: value
+get_version() {
+  local key="$1"
+  local file="$2"
+  awk -F= -vkey="${key}" '$1 == key { print $NF }' "${file}"
+}
 
 # Returns true if all files in parameters exist.
 # Args: List of files
 ensure_files_exist() {
   local filename return_value=0
   for filename in "$@"; do
-    if [ ! -f "$filename" -a ! -b "$filename" ]; then
+    if [ ! -f "$filename"  ] && [ ! -b "$filename" ]; then
       echo "ERROR: Cannot find required file: $filename"
       return_value=1
     fi
@@ -339,7 +507,13 @@ ensure_files_exist() {
 # Args: rootfs
 no_chronos_password() {
   local rootfs=$1
-  sudo grep -q '^chronos:\*:' "$rootfs/etc/shadow"
+  # Make sure the chronos user actually exists.
+  if grep -qs '^chronos:' "${rootfs}/etc/passwd"; then
+    sudo grep -q '^chronos:\*:' "${rootfs}/etc/shadow"
+  fi
 }
 
-trap "cleanup_temps_and_mounts" EXIT
+# Returns true if given ec.bin is signed or false if not.
+is_ec_rw_signed() {
+  ${FUTILITY} dump_fmap "$1" | grep -q KEY_RO
+}
