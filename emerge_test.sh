@@ -1,5 +1,5 @@
 #!/bin/sh
-# Copyright 2014 The Chromium OS Authors. All rights reserved.
+# Copyright 2014 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -57,4 +57,4 @@ echo "Running emerge tests (runs cros_workon start)."
 # Ignore errors about already working on those repos.
 cros_workon-${BOARD} start ${TEST_EBUILDS} || true
 
-USE=depthcharge emerge-${BOARD} ${TEST_EBUILDS}
+emerge-${BOARD} ${TEST_EBUILDS}

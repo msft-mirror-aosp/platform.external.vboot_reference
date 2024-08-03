@@ -1,7 +1,7 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
 #include <string.h>
 
@@ -15,13 +15,26 @@ static void AllocAndClear(uint8_t **buf, uint64_t size) {
   } else {
     *buf = calloc(1, size);
     if (!*buf) {
-      Error("Cannot allocate %lu bytes.\n", size);
+      Error("Cannot allocate %" PRIu64 " bytes.\n", size);
       abort();
     }
   }
 }
 
 static int GptCreate(struct drive *drive, CgptCreateParams *params) {
+  // Do not replace any existing IGNOREME GPT headers.
+  if (!memcmp(((GptHeader*)drive->gpt.primary_header)->signature,
+              GPT_HEADER_SIGNATURE_IGNORED, GPT_HEADER_SIGNATURE_SIZE)) {
+    drive->gpt.ignored |= MASK_PRIMARY;
+    Warning("Primary GPT was marked ignored, will not overwrite.\n");
+  }
+
+  if (!memcmp(((GptHeader*)drive->gpt.secondary_header)->signature,
+              GPT_HEADER_SIGNATURE_IGNORED, GPT_HEADER_SIGNATURE_SIZE)) {
+    drive->gpt.ignored |= MASK_SECONDARY;
+    Warning("Secondary GPT was marked ignored, will not overwrite.\n");
+  }
+
   // Allocate and/or erase the data.
   // We cannot assume the GPT headers or entry arrays have been allocated
   // by GptLoad() because those fields might have failed validation checks.
@@ -66,7 +79,7 @@ static int GptCreate(struct drive *drive, CgptCreateParams *params) {
       size_t half_size =
           (drive->gpt.gpt_drive_sectors / 2) * drive->gpt.sector_bytes;
       if (half_size < required_min_size) {
-        Error("Not enough space to store GPT structures. Required %d bytes.\n",
+        Error("Not enough space to store GPT structures. Required %zu bytes.\n",
               required_min_size * 2);
         return -1;
       }
@@ -81,9 +94,11 @@ static int GptCreate(struct drive *drive, CgptCreateParams *params) {
     h->entries_lba = h->my_lba + GPT_HEADER_SECTORS;
     if (!(drive->gpt.flags & GPT_FLAG_EXTERNAL)) {
       h->entries_lba += params->padding;
-      h->first_usable_lba = h->entries_lba + CalculateEntriesSectors(h);
-      h->last_usable_lba = (drive->gpt.streaming_drive_sectors - GPT_HEADER_SECTORS -
-                            CalculateEntriesSectors(h) - 1);
+      h->first_usable_lba = h->entries_lba + CalculateEntriesSectors(h,
+                                               drive->gpt.sector_bytes);
+      h->last_usable_lba =
+        (drive->gpt.streaming_drive_sectors - GPT_HEADER_SECTORS -
+          CalculateEntriesSectors(h, drive->gpt.sector_bytes) - 1);
     } else {
       h->first_usable_lba = params->padding;
       h->last_usable_lba = (drive->gpt.streaming_drive_sectors - 1);
