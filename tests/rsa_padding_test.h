@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -12,7 +12,11 @@
 #ifndef VBOOT_REFERENCE_RSA_PADDING_TEST_H_
 #define VBOOT_REFERENCE_RSA_PADDING_TEST_H_
 
-#include "cryptolib.h"
+#define RSA1024NUMBYTES 128  /* 1024 bit key length */
+#define RSA2048NUMBYTES 256  /* 2048 bit key length */
+#define RSA3072NUMBYTES 384  /* 3072 bit key length */
+#define RSA4096NUMBYTES 512  /* 4096 bit key length */
+#define RSA8192NUMBYTES 1024  /* 8192 bit key length */
 
 /* The modulus of the public key (RSA-1024). */
 static const uint8_t pubkey_n[] = {

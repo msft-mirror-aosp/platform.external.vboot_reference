@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 # Used when revving versions for a firmware update.
 
 # Load common constants and variables.
+# shellcheck source=common.sh
 . "${0%/*}"/common.sh
 
 # Abort on errors.
@@ -33,7 +34,7 @@ main() {
   backup_existing_kernel_subkeys ${CURR_FIRM_VER} ${CURR_KERNKEY_VER}
   backup_existing_kernel_data_keys ${CURR_FIRM_VER} ${CURR_KERNKEY_VER}
 
-  cat <<EOF 
+  cat <<EOF
 Generating new kernel subkey, data keys and new kernel keyblock.
 
 New Firmware version (due to kernel subkey change): ${new_firm_ver}.
