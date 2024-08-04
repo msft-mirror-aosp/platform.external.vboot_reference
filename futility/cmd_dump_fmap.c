@@ -1,10 +1,11 @@
-/*
- * Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,49 +19,69 @@
 #include "fmap.h"
 #include "futility.h"
 
-enum { FMT_NORMAL, FMT_PRETTY, FMT_FLASHROM, FMT_HUMAN };
+#define PRESERVE "preserve"
+#define NOT_PRESERVE "not-preserve"
+#define IS_PRESERVE(flags)                                                     \
+	((flags & FMAP_AREA_PRESERVE) ? PRESERVE : NOT_PRESERVE)
 
-/* global variables */
-static int opt_extract;
-static int opt_format = FMT_NORMAL;
-static int opt_overlap;
-static char *progname;
-static void *base_of_rom;
-static size_t size_of_rom;
-static int opt_gaps;
+/*
+ * FMT_NORMAL: This format contains info related to fmap and areas including
+ * their name, offset and size in multiple lines per area
+ * FMT_PARSER: This format is parsable by scripts, it contains info about areas
+ * including their name, offset and size
+ * FMT_FLASHROM: This format is understandable by 'flashrom', it contains info
+ * about areas including their name, first and last offsets
+ * FMT_HUMAN: This format is human reader friendly, it includes hierarchy based
+ * indentation. It contains info about areas including their name, first and
+ * last offsets and size
+ * FMT_FLASH_EC: This format is understandable by 'flash_ec' script, it contains
+ * info about areas including their name and preserve flag status
+ */
+typedef enum {
+	FMT_NORMAL,
+	FMT_PARSER,
+	FMT_FLASHROM,
+	FMT_HUMAN,
+	FMT_FLASH_EC
+} format_t;
 
 /* Return 0 if successful */
-static int dump_fmap(const FmapHeader *fmh, int argc, char *argv[])
+static int normal_fmap(const FmapHeader *fmh,
+	const void *base_of_rom, size_t size_of_rom,
+	bool extract, format_t format,
+	const char *const *names, size_t names_len)
 {
-	int i, retval = 0;
+	int retval = 0;
 	char buf[80];		/* DWR: magic number */
-	const FmapAreaHeader *ah;
-	ah = (const FmapAreaHeader *) (fmh + 1);
-	char *extract_names[argc];
-	char *outname = 0;
+	const FmapAreaHeader *ah = (const FmapAreaHeader *) (fmh + 1);
+        /* Size must greater than 0, else behavior is undefined. */
+	struct {
+		char *outname;
+		bool found;
+	} sections[names_len >= 1 ? names_len : 1];
 
-	if (opt_extract) {
+	memset(sections, 0, sizeof(sections));
+
+	if (extract) {
 		/* prepare the filenames to write areas to */
-		memset(extract_names, 0, sizeof(extract_names));
-		for (i = 0; i < argc; i++) {
-			char *a = argv[i];
+		for (int i = 0; i < names_len; i++) {
+			const char *a = names[i];
 			char *f = strchr(a, ':');
 			if (!f)
 				continue;
 			if (a == f || *(f+1) == '\0') {
-				fprintf(stderr,
-					"argument \"%s\" is bogus\n", a);
+				ERROR("argument \"%s\" is bogus\n", a);
 				retval = 1;
 				continue;
 			}
 			*f++ = '\0';
-			extract_names[i] = f;
+			sections[i].outname = f;
 		}
 		if (retval)
 			return retval;
 	}
 
-	if (FMT_NORMAL == opt_format) {
+	if (FMT_NORMAL == format) {
 		snprintf(buf, FMAP_SIGNATURE_SIZE + 1, "%s",
 			 fmh->fmap_signature);
 		printf("fmap_signature   %s\n", buf);
@@ -74,24 +95,25 @@ static int dump_fmap(const FmapHeader *fmh, int argc, char *argv[])
 		printf("fmap_nareas:     %d\n", fmh->fmap_nareas);
 	}
 
-	for (i = 0; i < fmh->fmap_nareas; i++, ah++) {
+	for (uint16_t i = 0; i < fmh->fmap_nareas; i++, ah++) {
 		snprintf(buf, FMAP_NAMELEN + 1, "%s", ah->area_name);
+		char *outname = NULL;
 
-		if (argc) {
-			int j, found = 0;
-			outname = NULL;
-			for (j = 0; j < argc; j++)
-				if (!strcmp(argv[j], buf)) {
-					found = 1;
-					outname = extract_names[j];
+		if (names_len) {
+			bool found = false;
+			for (int j = 0; j < names_len; j++)
+				if (!strcmp(names[j], buf)) {
+					found = true;
+					sections[j].found = true;
+					outname = sections[j].outname;
 					break;
 				}
 			if (!found)
 				continue;
 		}
 
-		switch (opt_format) {
-		case FMT_PRETTY:
+		switch (format) {
+		case FMT_PARSER:
 			printf("%s %d %d\n", buf, ah->area_offset,
 			       ah->area_size);
 			break;
@@ -101,6 +123,11 @@ static int dump_fmap(const FmapHeader *fmh, int argc, char *argv[])
 				       ah->area_offset + ah->area_size - 1,
 				       buf);
 			break;
+		case FMT_FLASH_EC:
+			if (ah->area_size)
+				printf("%s %d %d %s\n", buf, ah->area_offset, ah->area_size,
+				       IS_PRESERVE(ah->area_flags));
+			break;
 		default:
 			printf("area:            %d\n", i + 1);
 			printf("area_offset:     0x%08x\n", ah->area_offset);
@@ -109,40 +136,44 @@ static int dump_fmap(const FmapHeader *fmh, int argc, char *argv[])
 			printf("area_name:       %s\n", buf);
 		}
 
-		if (opt_extract) {
-			char *s;
+		if (extract) {
 			if (!outname) {
-				for (s = buf; *s; s++)
+				for (char *s = buf; *s; s++)
 					if (*s == ' ')
 						*s = '_';
 				outname = buf;
 			}
 			FILE *fp = fopen(outname, "wb");
 			if (!fp) {
-				fprintf(stderr, "%s: can't open %s: %s\n",
-					progname, outname, strerror(errno));
+				ERROR("can't open %s: %s\n",
+				      outname, strerror(errno));
 				retval = 1;
 			} else if (!ah->area_size) {
-				fprintf(stderr,
-					"%s: section %s has zero size\n",
-					progname, buf);
+				ERROR("section %s has zero size\n", buf);
+				retval = 1;
 			} else if (ah->area_offset + ah->area_size >
 				   size_of_rom) {
-				fprintf(stderr, "%s: section %s is larger"
-					" than the image\n", progname, buf);
+				ERROR("section %s is larger than the image\n", buf);
 				retval = 1;
 			} else if (1 != fwrite(base_of_rom + ah->area_offset,
 					       ah->area_size, 1, fp)) {
-				fprintf(stderr, "%s: can't write %s: %s\n",
-					progname, buf, strerror(errno));
+				ERROR("can't write %s: %s\n",
+				      buf, strerror(errno));
 				retval = 1;
 			} else {
-				if (FMT_NORMAL == opt_format)
+				if (FMT_NORMAL == format)
 					printf("saved as \"%s\"\n", outname);
 			}
-			fclose(fp);
+			if (fp)
+				fclose(fp);
 		}
 	}
+
+	for (int j = 0; j < names_len; j++)
+		if (!sections[j].found) {
+			ERROR("FMAP section %s not found\n", names[j]);
+			retval = 1;
+		}
 
 	return retval;
 }
@@ -170,14 +201,11 @@ static struct node_s *all_nodes;
 
 static void sort_nodes(int num, struct node_s *ary[])
 {
-	int i, j;
-	struct node_s *tmp;
-
 	/* bubble-sort is quick enough with only a few entries */
-	for (i = 0; i < num; i++) {
-		for (j = i + 1; j < num; j++) {
+	for (unsigned int i = 0; i < num; i++) {
+		for (unsigned int j = i + 1; j < num; j++) {
 			if (ary[j]->start > ary[i]->start) {
-				tmp = ary[i];
+				struct node_s *tmp = ary[i];
 				ary[i] = ary[j];
 				ary[j] = tmp;
 			}
@@ -185,30 +213,27 @@ static void sort_nodes(int num, struct node_s *ary[])
 	}
 }
 
-static void line(int indent, char *name,
-		 uint32_t start, uint32_t end, uint32_t size, char *append)
+static void line(int indent, const char *name, uint32_t start, uint32_t end,
+		 uint32_t size, const char *append)
 {
-	int i;
-	for (i = 0; i < indent; i++)
+	for (int i = 0; i < indent; i++)
 		printf("  ");
 	printf("%-25s  %08x    %08x    %08x%s\n", name, start, end, size,
 	       append ? append : "");
 }
 
-static int gapcount;
-static void empty(int indent, uint32_t start, uint32_t end, char *name)
+static void empty(int indent, uint32_t start, uint32_t end, char *name, bool gaps, int *gapcount)
 {
 	char buf[80];
-	if (opt_gaps) {
+	if (gaps) {
 		sprintf(buf, "  // gap in %s", name);
 		line(indent + 1, "", start, end, end - start, buf);
 	}
-	gapcount++;
+	(*gapcount)++;
 }
 
-static void show(struct node_s *p, int indent, int show_first)
+static void show(struct node_s *p, int indent, int show_first, bool show_gaps, int *gapcount)
 {
-	int i;
 	struct dup_s *alias;
 	if (show_first) {
 		line(indent, p->name, p->start, p->end, p->size, 0);
@@ -217,16 +242,16 @@ static void show(struct node_s *p, int indent, int show_first)
 			     "  // DUPLICATE");
 	}
 	sort_nodes(p->num_children, p->child);
-	for (i = 0; i < p->num_children; i++) {
+	for (unsigned int i = 0; i < p->num_children; i++) {
 		if (i == 0 && p->end != p->child[i]->end)
-			empty(indent, p->child[i]->end, p->end, p->name);
-		show(p->child[i], indent + show_first, 1);
+			empty(indent, p->child[i]->end, p->end, p->name, show_gaps, gapcount);
+		show(p->child[i], indent + show_first, 1, show_gaps, gapcount);
 		if (i < p->num_children - 1
 		    && p->child[i]->start != p->child[i + 1]->end)
 			empty(indent, p->child[i + 1]->end, p->child[i]->start,
-			      p->name);
+			      p->name, show_gaps, gapcount);
 		if (i == p->num_children - 1 && p->child[i]->start != p->start)
-			empty(indent, p->start, p->child[i]->start, p->name);
+			empty(indent, p->start, p->child[i]->start, p->name, show_gaps, gapcount);
 	}
 }
 
@@ -257,20 +282,16 @@ static int duplicates(int i, int j)
 
 static void add_dupe(int i, int j, int numnodes)
 {
-	int k;
-	struct dup_s *alias;
-
-	alias = (struct dup_s *) malloc(sizeof(struct dup_s));
+	struct dup_s *alias = (struct dup_s *) malloc(sizeof(struct dup_s));
 	alias->name = all_nodes[j].name;
 	alias->next = all_nodes[i].alias;
 	all_nodes[i].alias = alias;
-	for (k = j; k < numnodes; k++)
+	for (int k = j; k < numnodes; k++)
 		all_nodes[k] = all_nodes[k + 1];
 }
 
 static void add_child(struct node_s *p, int n)
 {
-	int i;
 	if (p->num_children && !p->child) {
 		p->child =
 		    (struct node_s **)calloc(p->num_children,
@@ -280,20 +301,17 @@ static void add_child(struct node_s *p, int n)
 			exit(1);
 		}
 	}
-	for (i = 0; i < p->num_children; i++)
+	for (unsigned int i = 0; i < p->num_children; i++) {
 		if (!p->child[i]) {
 			p->child[i] = all_nodes + n;
 			return;
 		}
+	}
 }
 
-static int human_fmap(const FmapHeader *fmh)
+static int human_fmap(const FmapHeader *fmh, bool gaps, int overlap)
 {
-	FmapAreaHeader *ah;
-	int i, j, errorcnt = 0;
-	int numnodes;
-
-	ah = (FmapAreaHeader *) (fmh + 1);
+	int errorcnt = 0;
 
 	/* The challenge here is to generate a directed graph from the
 	 * arbitrarily-ordered FMAP entries, and then to prune it until it's as
@@ -301,23 +319,25 @@ static int human_fmap(const FmapHeader *fmh)
 	 * Duplicate regions are okay, but may require special handling. */
 
 	/* Convert the FMAP info into our format. */
-	numnodes = fmh->fmap_nareas;
+	uint16_t numnodes = fmh->fmap_nareas;
 
 	/* plus one for the all-enclosing "root" */
 	all_nodes = (struct node_s *) calloc(numnodes + 1,
 					     sizeof(struct node_s));
 	if (!all_nodes) {
 		perror("calloc failed");
-		exit(1);
+		return 1;
 	}
-	for (i = 0; i < numnodes; i++) {
+	for (uint16_t i = 0; i < numnodes; i++) {
 		char buf[FMAP_NAMELEN + 1];
+		const FmapAreaHeader *ah = (FmapAreaHeader *) (fmh + 1);
+
 		strncpy(buf, ah[i].area_name, FMAP_NAMELEN);
 		buf[FMAP_NAMELEN] = '\0';
 		all_nodes[i].name = strdup(buf);
 		if (!all_nodes[i].name) {
 			perror("strdup failed");
-			exit(1);
+			return 1;
 		}
 		all_nodes[i].start = ah[i].area_offset;
 		all_nodes[i].size = ah[i].area_size;
@@ -330,8 +350,8 @@ static int human_fmap(const FmapHeader *fmh)
 	all_nodes[numnodes].end = fmh->fmap_base + fmh->fmap_size;
 
 	/* First, coalesce any duplicates */
-	for (i = 0; i < numnodes; i++) {
-		for (j = i + 1; j < numnodes; j++) {
+	for (uint16_t i = 0; i < numnodes; i++) {
+		for (uint16_t j = i + 1; j < numnodes; j++) {
 			if (duplicates(i, j)) {
 				add_dupe(i, j, numnodes);
 				numnodes--;
@@ -343,20 +363,20 @@ static int human_fmap(const FmapHeader *fmh)
 	 * enclosing node. Duplicate nodes "enclose" each other, but if there's
 	 * already a relationship in one direction, we won't create another.
 	 */
-	for (i = 0; i < numnodes; i++) {
+	for (uint16_t i = 0; i < numnodes; i++) {
 		/* Find the smallest parent, which might be the root node. */
 		int k = numnodes;
-		for (j = 0; j < numnodes; j++) { /* full O(N^2) comparison */
+		for (uint16_t j = 0; j < numnodes; j++) { /* full O(N^2) comparison */
 			if (i == j)
 				continue;
 			if (overlaps(i, j)) {
 				printf("ERROR: %s and %s overlap\n",
 				       all_nodes[i].name, all_nodes[j].name);
-				printf("  %s: 0x%x - 0x%x\n", all_nodes[i].name,
+				printf("  %s: %#x - %#x\n", all_nodes[i].name,
 				       all_nodes[i].start, all_nodes[i].end);
-				printf("  %s: 0x%x - 0x%x\n", all_nodes[j].name,
+				printf("  %s: %#x - %#x\n", all_nodes[j].name,
 				       all_nodes[j].start, all_nodes[j].end);
-				if (opt_overlap < 2) {
+				if (overlap < 2) {
 					printf("Use more -h args to ignore"
 					       " this error\n");
 					errorcnt++;
@@ -373,18 +393,19 @@ static int human_fmap(const FmapHeader *fmh)
 		return 1;
 
 	/* Force those deadbeat parents to recognize their children */
-	for (i = 0; i < numnodes; i++)	/* how many */
+	for (uint16_t i = 0; i < numnodes; i++)	/* how many */
 		if (all_nodes[i].parent)
 			all_nodes[i].parent->num_children++;
-	for (i = 0; i < numnodes; i++)	/* here they are */
+	for (uint16_t i = 0; i < numnodes; i++)	/* here they are */
 		if (all_nodes[i].parent)
 			add_child(all_nodes[i].parent, i);
 
 	/* Ready to go */
 	printf("# name                     start       end         size\n");
-	show(all_nodes + numnodes, 0, opt_gaps);
+	int gapcount = 0;
+	show(all_nodes + numnodes, 0, gaps, gaps, &gapcount);
 
-	if (gapcount && !opt_gaps)
+	if (gapcount && !gaps)
 		printf("\nWARNING: unused regions found. Use -H to see them\n");
 
 	return 0;
@@ -403,53 +424,66 @@ static const char usage[] =
 	"  -H             With -h, display any gaps\n"
 	"  -p             Use a format easy to parse by scripts\n"
 	"  -F             Use the format expected by flashrom\n"
+	"  -e             Use the format expected by flash_ec\n"
 	"\n"
 	"Specify one or more NAMEs to dump only those sections.\n"
 	"\n";
 
-static void print_help(const char *name)
+static void print_help(int argc, char *argv[])
 {
-	printf(usage, name);
+	printf(usage, argv[0]);
 }
 
+enum {
+	OPT_HELP = 1000,
+};
+static const struct option long_opts[] = {
+	{"help",     0, 0, OPT_HELP},
+	{NULL, 0, 0, 0}
+};
 static int do_dump_fmap(int argc, char *argv[])
 {
 	int c;
 	int errorcnt = 0;
-	struct stat sb;
-	int fd;
-	const FmapHeader *fmap;
 	int retval = 1;
-
-	progname = argv[0];
+	bool opt_extract = false;
+	int opt_overlap = 0;
+	bool opt_gaps = false;
+	format_t opt_format = FMT_NORMAL;
 
 	opterr = 0;		/* quiet, you */
-	while ((c = getopt(argc, argv, ":xpFhH")) != -1) {
+	while ((c = getopt_long(argc, argv, ":xpFhHe", long_opts, 0)) != -1) {
 		switch (c) {
 		case 'x':
-			opt_extract = 1;
+			opt_extract = true;
 			break;
 		case 'p':
-			opt_format = FMT_PRETTY;
+			opt_format = FMT_PARSER;
+			break;
+		case 'e':
+			opt_format = FMT_FLASH_EC;
 			break;
 		case 'F':
 			opt_format = FMT_FLASHROM;
 			break;
 		case 'H':
-			opt_gaps = 1;
-			/* fallthrough */
+			opt_gaps = true;
+			VBOOT_FALLTHROUGH;
 		case 'h':
 			opt_format = FMT_HUMAN;
 			opt_overlap++;
 			break;
+		case OPT_HELP:
+			print_help(argc, argv);
+			return 0;
 		case '?':
-			fprintf(stderr, "%s: unrecognized switch: -%c\n",
-				progname, optopt);
+			ERROR("%s: unrecognized switch: -%c\n",
+				argv[0], optopt);
 			errorcnt++;
 			break;
 		case ':':
-			fprintf(stderr, "%s: missing argument to -%c\n",
-				progname, optopt);
+			ERROR("%s: missing argument to -%c\n",
+				argv[0], optopt);
 			errorcnt++;
 			break;
 		default:
@@ -459,61 +493,64 @@ static int do_dump_fmap(int argc, char *argv[])
 	}
 
 	if (errorcnt || optind >= argc) {
-		print_help(progname);
+		print_help(argc, argv);
 		return 1;
 	}
 
-	if (0 != stat(argv[optind], &sb)) {
-		fprintf(stderr, "%s: can't stat %s: %s\n",
-			progname, argv[optind], strerror(errno));
-		return 1;
-	}
-
-	fd = open(argv[optind], O_RDONLY);
+	int fd = open(argv[optind], O_RDONLY);
 	if (fd < 0) {
-		fprintf(stderr, "%s: can't open %s: %s\n",
-			progname, argv[optind], strerror(errno));
+		ERROR("%s: can't open %s: %s\n",
+			argv[0], argv[optind], strerror(errno));
 		return 1;
 	}
 
-	base_of_rom =
-	    mmap(0, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
-	if (base_of_rom == (char *)-1) {
-		fprintf(stderr, "%s: can't mmap %s: %s\n",
-			progname, argv[optind], strerror(errno));
+	struct stat sb;
+	if (fstat(fd, &sb)) {
+		ERROR("%s: can't stat %s: %s\n",
+			argv[0], argv[optind], strerror(errno));
+		close(fd);
+		return 1;
+	}
+
+	void *base_of_rom = mmap(0, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+	if (base_of_rom == MAP_FAILED) {
+		ERROR("%s: can't mmap %s: %s\n",
+			argv[0], argv[optind], strerror(errno));
 		close(fd);
 		return 1;
 	}
 	close(fd);		/* done with this now */
-	size_of_rom = sb.st_size;
 
-	fmap = fmap_find(base_of_rom, size_of_rom);
+	const size_t size_of_rom = sb.st_size;
+
+	const FmapHeader *fmap = fmap_find(base_of_rom, size_of_rom);
 	if (fmap) {
 		switch (opt_format) {
 		case FMT_HUMAN:
-			retval = human_fmap(fmap);
+			retval = human_fmap(fmap, opt_gaps, opt_overlap);
 			break;
 		case FMT_NORMAL:
 			printf("hit at 0x%08x\n",
 			       (uint32_t) ((char *)fmap - (char *)base_of_rom));
-			/* fallthrough */
+			VBOOT_FALLTHROUGH;
 		default:
-			retval =
-			    dump_fmap(fmap, argc - optind - 1,
-				      argv + optind + 1);
+			retval = normal_fmap(fmap, base_of_rom, size_of_rom,
+					     opt_extract, opt_format,
+					     (const char **)(argv + optind + 1),
+					     argc - optind - 1);
 		}
+	} else {
+		ERROR("FMAP header not found in %s\n", argv[optind]);
 	}
 
-	if (0 != munmap(base_of_rom, sb.st_size)) {
-		fprintf(stderr, "%s: can't munmap %s: %s\n",
-			progname, argv[optind], strerror(errno));
+	if (munmap(base_of_rom, sb.st_size)) {
+		ERROR("%s: can't munmap %s: %s\n",
+			argv[0], argv[optind], strerror(errno));
 		return 1;
 	}
 
 	return retval;
 }
 
-DECLARE_FUTIL_COMMAND(dump_fmap, do_dump_fmap,
-		      VBOOT_VERSION_ALL,
-		      "Display FMAP contents from a firmware image",
-		      print_help);
+DECLARE_FUTIL_COMMAND(dump_fmap, do_dump_fmap, VBOOT_VERSION_ALL,
+		      "Display FMAP contents from a firmware image");

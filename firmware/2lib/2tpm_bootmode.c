@@ -1,13 +1,13 @@
-/* Copyright 2015 The Chromium OS Authors. All rights reserved.
+/* Copyright 2015 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
  * Functions for updating the TPM state with the status of boot path.
  */
 
-#include "2sysincludes.h"
 #include "2common.h"
 #include "2sha.h"
+#include "2sysincludes.h"
 #include "2tpm_bootmode.h"
 
 /*

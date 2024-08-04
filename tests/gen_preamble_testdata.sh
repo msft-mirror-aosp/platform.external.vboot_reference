@@ -1,14 +1,14 @@
 #!/bin/bash -eu
 #
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
-# This generates the pre-change test data used to ensure that modifications to
-# VbFirmwarePreambleHeader and VbKernelPreambleHeader will not break the
-# signing tools for older releases. This was run *before* any modifications, so
-# be sure to revert the repo back to the correct point if you need to run it
-# again.
+# This generates the pre-change test data used to ensure that
+# modifications to vb2_fw_preamble and vb2_kernel_preamble will not
+# break the signing tools for older releases. This was run *before*
+# any modifications, so be sure to revert the repo back to the correct
+# point if you need to run it again.
 
 
 # Load common constants and variables for tests.
@@ -53,7 +53,6 @@ make_pair "${DATADIR}/dummy_0" 0
 
 # and a few more dummy files just because (crosbug.com/23548)
 echo "hi there" > "${DATADIR}/dummy_config.txt"
-dd if=/dev/urandom bs=32768 count=1 of="${DATADIR}/dummy_bootloader.bin"
 
 # make some fake data
 dd if=/dev/urandom of="${DATADIR}/FWDATA" bs=32768 count=1
@@ -64,21 +63,20 @@ dd if=/dev/urandom of="${DATADIR}/KERNDATA" bs=32768 count=1
 # pre-change tools.
 for d in $algs; do
   for r in $algs; do
-      vbutil_firmware --vblock "${V2DIR}/fw_${d}_${r}.vblock" \
-        --keyblock "${DATADIR}/kb_${d}_${r}.keyblock" \
-        --signprivate "${DATADIR}/data_${d}.vbprivk" \
-        --version 1 \
-        --kernelkey "${DATADIR}/dummy_0.vbpubk" \
-        --fv "${DATADIR}/FWDATA"
-     vbutil_kernel --pack "${V2DIR}/kern_${d}_${r}.vblock" \
-       --keyblock "${DATADIR}/kb_${d}_${r}.keyblock" \
-       --signprivate "${DATADIR}/data_${d}.vbprivk" \
-       --version 1 \
-       --arch arm \
-       --vmlinuz "${DATADIR}/KERNDATA" \
-       --bootloader "${DATADIR}/dummy_bootloader.bin" \
-       --config "${DATADIR}/dummy_config.txt"
+    "${FUTILITY}" sign \
+      --signprivate "${DATADIR}/data_${d}.vbprivk" \
+      --keyblock "${DATADIR}/kb_${d}_${r}.keyblock" \
+      --kernelkey "${DATADIR}/dummy_0.vbpubk" \
+      --version 1 \
+      --fv "${DATADIR}/FWDATA" \
+      --outfile "${V2DIR}/fw_${d}_${r}.vblock"
+    "${FUTILITY}" sign \
+      --signprivate "${DATADIR}/data_${d}.vbprivk" \
+      --keyblock "${DATADIR}/kb_${d}_${r}.keyblock" \
+      --config "${DATADIR}/dummy_config.txt" \
+      --arch arm \
+      --version 1 \
+      --vmlinuz "${DATADIR}/KERNDATA" \
+      --outfile "${V2DIR}/kern_${d}_${r}.vblock"
   done
 done
-
-
