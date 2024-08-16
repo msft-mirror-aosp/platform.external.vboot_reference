@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
+# Copyright 2012 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -20,7 +20,7 @@ main() {
     # When finished we will use testfail to determine our exit value.
     local testfail=0
 
-    if [ $# -ne 1 ] && [ $# -ne 2 ]; then
+    if [[ $# -ne 1 ]] && [[ $# -ne 2 ]]; then
         usage
         exit 1
     fi
@@ -31,33 +31,42 @@ main() {
     # with a .config file extension, ie ensure_no_nonrelease_files.config.
     local configfile="$(dirname "$0")/${0/%.sh/.config}"
     # Or, maybe a config was provided on the command line.
-    if [ $# -eq 2 ]; then
+    if [[ $# -eq 2 ]]; then
         configfile="$2"
     fi
     # Either way, load test-expectations data from config.
-    . "$configfile" || return 1
+    . "${configfile}" || return 1
 
-    local rootfs=$(make_temp_dir)
-    mount_image_partition_ro "$image" 3 "$rootfs"
+    local loopdev rootfs
+    if [[ -d "${image}" ]]; then
+        rootfs="${image}"
+    else
+        rootfs=$(make_temp_dir)
+        loopdev=$(loopback_partscan "${image}")
+        mount_loop_image_partition "${loopdev}" 3 "${rootfs}"
+    fi
+    # Pick the right set of test-expectation data to use.
+    local brdvar=$(get_boardvar_from_lsb_release "${rootfs}")
+    eval "release_file_blocklist=(\"\${RELEASE_FILE_BLOCKLIST_${brdvar}[@]}\")"
 
-    for file in ${RELEASE_FILE_BLACKLIST[@]}; do
-        if [ -e "$rootfs/$file" ]; then
-            echo "FAIL: $file exists in this image!"
-            ls -al "$rootfs/$file"
+    for file in ${release_file_blocklist}; do
+        if [ -e "${rootfs}/${file}" ]; then
+            error "${file} exists in this image!"
+            ls -al "${rootfs}/${file}"
             testfail=1
         fi
     done
 
     # Verify that session_manager isn't configured to pass additional
     # environment variables or command-line arguments to Chrome.
-    local config_path="$rootfs/etc/chrome_dev.conf"
+    local config_path="${rootfs}/etc/chrome_dev.conf"
     local matches=$(grep -s "^[^#]" "${config_path}")
-    if [ -n "$matches" ]; then
-        echo "FAIL: Found commands in $config_path:"
-        echo "$matches"
+    if [ -n "${matches}" ]; then
+        error "Found commands in ${config_path}:"
+        error "${matches}"
         testfail=1
     fi
 
-    exit $testfail
+    exit ${testfail}
 }
 main "$@"

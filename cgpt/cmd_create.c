@@ -1,6 +1,7 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
 #include <getopt.h>
 #include <string.h>
@@ -15,10 +16,10 @@ static void Usage(void)
   printf("\nUsage: %s create [OPTIONS] DRIVE\n\n"
          "Create or reset an empty GPT.\n\n"
          "Options:\n"
-         "  -D NUM       Size (in bytes) of the disk where partitions reside\n"
+         "  -D NUM       Size (in bytes) of the disk where partitions reside;\n"
          "                 default 0, meaning partitions and GPT structs are\n"
          "                 both on DRIVE\n"
-         "  -z           Zero the sectors of the GPT table and entries\n"
+         "  -z           Zero the blocks of the GPT table and entries\n"
          "  -p NUM       Size (in blocks) of the disk to pad between the\n"
          "                 primary GPT header and its entries, default 0\n"
          "\n", progname);
@@ -39,22 +40,14 @@ int cmd_create(int argc, char *argv[]) {
     {
     case 'D':
       params.drive_size = strtoull(optarg, &e, 0);
-      if (!*optarg || (e && *e))
-      {
-        Error("invalid argument to -%c: \"%s\"\n", c, optarg);
-        errorcnt++;
-      }
+      errorcnt += check_int_parse(c, e);
       break;
     case 'z':
       params.zap = 1;
       break;
     case 'p':
       params.padding = strtoull(optarg, &e, 0);
-      if (!*optarg || (e && *e))
-      {
-        Error("invalid argument to -%c: \"%s\"\n", c, optarg);
-        errorcnt++;
-      }
+      errorcnt += check_int_parse(c, e);
       break;
     case 'h':
       Usage();
