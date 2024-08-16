@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -12,18 +12,17 @@
 
 #include "tlcl.h"
 #include "tlcl_tests.h"
-#include "utility.h"
 
 #define INDEX0 0xcafe
 
 int main(int argc, char** argv) {
-  uint32_t x;
+	uint32_t x;
 
-  TlclLibInit();
-  TPM_CHECK(TlclStartup());
-  TPM_CHECK(TlclContinueSelfTest());
-  TPM_CHECK(TlclAssertPhysicalPresence());
-  TPM_CHECK(TlclRead(INDEX0, (uint8_t*) &x, sizeof(x)));
-  printf("TEST SUCCEEDED\n");
-  return 0;
+	TlclLibInit();
+	TPM_CHECK(TlclStartup());
+	TPM_CHECK(TlclContinueSelfTest());
+	TPM_CHECK(TlclAssertPhysicalPresence());
+	TPM_CHECK(TlclRead(INDEX0, (uint8_t*) &x, sizeof(x)));
+	printf("TEST SUCCEEDED\n");
+	return 0;
 }

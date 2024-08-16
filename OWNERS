@@ -1,2 +1,2 @@
-wfrichar@google.com
-rspangler@google.com
+include platform/system/core:main:/janitors/OWNERS
+czapiga@google.com

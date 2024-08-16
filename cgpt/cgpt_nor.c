@@ -1,4 +1,4 @@
-/* Copyright 2015 The Chromium OS Authors. All rights reserved.
+/* Copyright 2015 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -8,7 +8,9 @@
 #include <fcntl.h>
 #include <ftw.h>
 #include <inttypes.h>
+#if !defined(__FreeBSD__)
 #include <linux/major.h>
+#endif
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -22,6 +24,7 @@
 
 #include "cgpt.h"
 #include "cgpt_nor.h"
+#include "subprocess.h"
 
 static const char FLASHROM_PATH[] = "/usr/sbin/flashrom";
 
@@ -46,6 +49,7 @@ int GetMtdSize(const char *mtd_device, uint64_t *size) {
   return ret;
 }
 
+// TODO(b:184812319): Remove these functions and use subprocess_run everywhere.
 int ForkExecV(const char *cwd, const char *const argv[]) {
   pid_t pid = fork();
   if (pid == -1) {
@@ -66,7 +70,7 @@ int ForkExecV(const char *cwd, const char *const argv[]) {
   return status;
 }
 
-int ForkExecL(const char *cwd, const char *cmd, ...) {
+static int ForkExecL(const char *cwd, const char *cmd, ...) {
   int argc;
   va_list ap;
   va_start(ap, cmd);
@@ -77,6 +81,7 @@ int ForkExecL(const char *cwd, const char *cmd, ...) {
   const char **argv = calloc(argc + 1, sizeof(char *));
   if (argv == NULL) {
     errno = ENOMEM;
+    va_end(ap);
     return -1;
   }
   argv[0] = cmd;
@@ -194,39 +199,62 @@ int RemoveDir(const char *dir) {
   return nftw(dir, remove_file_or_dir, 20, FTW_DEPTH | FTW_PHYS);
 }
 
-// Read RW_GPT from NOR flash to "rw_gpt" in a temp dir |temp_dir_template|.
-// |temp_dir_template| is passed to mkdtemp() so it must satisfy all
-// requirements by mkdtemp.
-int ReadNorFlash(char *temp_dir_template) {
-  int ret = 0;
+#define FLASHROM_RW_GPT_PRI "RW_GPT_PRIMARY:rw_gpt_1",
+#define FLASHROM_RW_GPT_SEC "RW_GPT_SECONDARY:rw_gpt_2"
+#define FLASHROM_RW_GPT "RW_GPT:rw_gpt"
 
-  // Create a temp dir to work in.
-  ret++;
-  if (mkdtemp(temp_dir_template) == NULL) {
-    Error("Cannot create a temporary directory.\n");
-    return ret;
-  }
+// Read RW_GPT from NOR flash to "rw_gpt" in a dir.
+// TODO(b:184812319): Replace this function with flashrom_read.
+int ReadNorFlash(const char *dir) {
+  int ret = 0;
 
   // Read RW_GPT section from NOR flash to "rw_gpt".
   ret++;
-  int fd_flags = fcntl(1, F_GETFD);
-  // Close stdout on exec so that flashrom does not muck up cgpt's output.
-  fcntl(1, F_SETFD, FD_CLOEXEC);
-  if (ForkExecL(temp_dir_template, FLASHROM_PATH, "-i", "RW_GPT:rw_gpt", "-r",
-                NULL) != 0) {
+
+  char *cwd = getcwd(NULL, 0);
+  if (!cwd) {
+    Error("Cannot get current directory.\n");
+    return ret;
+  }
+  if (chdir(dir) < 0) {
+    Error("Cannot change directory.\n");
+    goto out_free;
+  }
+  const char *const argv[] = {FLASHROM_PATH, "-i", FLASHROM_RW_GPT, "-r"};
+  // Redirect stdout to /dev/null so that flashrom does not muck up cgpt's
+  // output.
+  if (subprocess_run(argv, &subprocess_null, &subprocess_null, NULL) != 0) {
     Error("Cannot exec flashrom to read from RW_GPT section.\n");
-    RemoveDir(temp_dir_template);
   } else {
     ret = 0;
   }
+  if (chdir(cwd) < 0) {
+    Error("Cannot change directory back to original.\n");
+    goto out_free;
+  }
 
-  fcntl(1, F_SETFD, fd_flags);
+out_free:
+  free(cwd);
   return ret;
 }
 
+static int FlashromWriteRegion(const char *region)
+{
+  const char *const argv[] = {FLASHROM_PATH, "-i", region, "-w", "--noverify-all"};
+  // Redirect stdout to /dev/null so that flashrom does not muck up cgpt's
+  // output.
+  if (subprocess_run(argv, &subprocess_null, &subprocess_null, NULL) != 0) {
+    Warning("Cannot write '%s' back with flashrom.\n", region);
+    return 1;
+  }
+  return 0;
+}
+
 // Write "rw_gpt" back to NOR flash. We write the file in two parts for safety.
+// TODO(b:184812319): Replace this function with flashrom_write.
 int WriteNorFlash(const char *dir) {
   int ret = 0;
+
   ret++;
   if (split_gpt(dir, "rw_gpt") != 0) {
     Error("Cannot split rw_gpt in two.\n");
@@ -234,24 +262,32 @@ int WriteNorFlash(const char *dir) {
   }
   ret++;
   int nr_fails = 0;
-  int fd_flags = fcntl(1, F_GETFD);
-  // Close stdout on exec so that flashrom does not muck up cgpt's output.
-  fcntl(1, F_SETFD, FD_CLOEXEC);
-  if (ForkExecL(dir, FLASHROM_PATH, "-i", "RW_GPT_PRIMARY:rw_gpt_1",
-                "-w", "--fast-verify", NULL) != 0) {
-    Warning("Cannot write the 1st half of rw_gpt back with flashrom.\n");
-    nr_fails++;
+
+  char *cwd = getcwd(NULL, 0);
+  if (!cwd) {
+    Error("Cannot get current directory.\n");
+    return ret;
   }
-  if (ForkExecL(dir, FLASHROM_PATH, "-i", "RW_GPT_SECONDARY:rw_gpt_2",
-                "-w", "--fast-verify", NULL) != 0) {
-    Warning("Cannot write the 2nd half of rw_gpt back with flashrom.\n");
-    nr_fails++;
+  if (chdir(dir) < 0) {
+    Error("Cannot change directory.\n");
+    goto out_free;
   }
-  fcntl(1, F_SETFD, fd_flags);
+  if (FlashromWriteRegion(FLASHROM_RW_GPT_PRI))
+    nr_fails++;
+  if (FlashromWriteRegion(FLASHROM_RW_GPT_SEC))
+    nr_fails++;
+
+  if (chdir(cwd) < 0) {
+    Error("Cannot change directory back to original.\n");
+    goto out_free;
+  }
   switch (nr_fails) {
     case 0: ret = 0; break;
     case 1: Warning("It might still be okay.\n"); break;
     case 2: Error("Cannot write both parts back with flashrom.\n"); break;
   }
+
+out_free:
+  free(cwd);
   return ret;
 }

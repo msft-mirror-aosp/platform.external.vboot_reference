@@ -1,6 +1,7 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
 #include <getopt.h>
 #include <string.h>
@@ -16,7 +17,7 @@ static void Usage(void)
          "Find a partition by its UUID or label. With no specified DRIVE\n"
          "it scans all physical drives.\n\n"
          "Options:\n"
-         "  -D NUM       Size (in bytes) of the disk where partitions reside\n"
+         "  -D NUM       Size (in bytes) of the disk where partitions reside;\n"
          "                 default 0, meaning partitions and GPT structs are\n"
          "                 both on DRIVE\n"
          "  -t GUID      Search for Partition Type GUID\n"
@@ -37,6 +38,7 @@ static void Usage(void)
 static uint8_t *ReadFile(const char *filename, uint64_t *size) {
   FILE *f;
   uint8_t *buf;
+  long pos;
 
   f = fopen(filename, "rb");
   if (!f) {
@@ -44,7 +46,12 @@ static uint8_t *ReadFile(const char *filename, uint64_t *size) {
   }
 
   fseek(f, 0, SEEK_END);
-  *size = ftell(f);
+  pos = ftell(f);
+  if (pos < 0) {
+    fclose(f);
+    return NULL;
+  }
+  *size = pos;
   rewind(f);
 
   buf = malloc(*size);
@@ -53,7 +60,7 @@ static uint8_t *ReadFile(const char *filename, uint64_t *size) {
     return NULL;
   }
 
-  if(1 != fread(buf, *size, 1, f)) {
+  if (1 != fread(buf, *size, 1, f)) {
     fclose(f);
     free(buf);
     return NULL;
@@ -80,11 +87,7 @@ int cmd_find(int argc, char *argv[]) {
     {
     case 'D':
       params.drive_size = strtoull(optarg, &e, 0);
-      if (!*optarg || (e && *e))
-      {
-        Error("invalid argument to -%c: \"%s\"\n", c, optarg);
-        errorcnt++;
-      }
+      errorcnt += check_int_parse(c, e);
       break;
     case 'v':
       params.verbose++;
@@ -130,10 +133,7 @@ int cmd_find(int argc, char *argv[]) {
       break;
     case 'O':
       params.matchoffset = strtoull(optarg, &e, 0);
-      if (!*optarg || (e && *e)) {
-        Error("invalid argument to -%c: \"%s\"\n", c, optarg);
-        errorcnt++;
-      }
+      errorcnt += check_int_parse(c, e);
       break;
 
     case 'h':

@@ -1,55 +1,55 @@
-/* Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
  * Routines for verifying a kernel or disk image
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
+#include "2sysincludes.h"
+#include "2api.h"
+#include "2common.h"
+#include "2misc.h"
+#include "2nvstorage.h"
+#include "2secdata.h"
 #include "host_common.h"
 #include "util_misc.h"
-#include "vboot_common.h"
 #include "vboot_api.h"
-#include "vboot_kernel.h"
+
+static uint8_t workbuf[VB2_KERNEL_WORKBUF_RECOMMENDED_SIZE]
+	__attribute__((aligned(VB2_WORKBUF_ALIGN)));
+static struct vb2_context *ctx;
 
 static uint8_t *diskbuf;
 
-static uint8_t shared_data[VB_SHARED_DATA_MIN_SIZE];
-static VbSharedDataHeader *shared = (VbSharedDataHeader *)shared_data;
-static VbNvContext nvc;
+static struct vb2_kernel_params params;
+static struct vb2_disk_info disk_info;
 
-static LoadKernelParams params;
-static VbCommonParams cparams;
-
-VbError_t VbExDiskRead(VbExDiskHandle_t handle, uint64_t lba_start,
-		       uint64_t lba_count, void *buffer)
+vb2_error_t VbExDiskRead(vb2ex_disk_handle_t handle, uint64_t lba_start,
+			 uint64_t lba_count, void *buffer)
 {
-	if (handle != (VbExDiskHandle_t)1)
-		return VBERROR_UNKNOWN;
-	if (lba_start >= params.streaming_lba_count)
-		return VBERROR_UNKNOWN;
-	if (lba_start + lba_count > params.streaming_lba_count)
-		return VBERROR_UNKNOWN;
+	if (handle != (vb2ex_disk_handle_t)1)
+		return VB2_ERROR_UNKNOWN;
+	if (lba_start >= disk_info.streaming_lba_count)
+		return VB2_ERROR_UNKNOWN;
+	if (lba_start + lba_count > disk_info.streaming_lba_count)
+		return VB2_ERROR_UNKNOWN;
 
 	memcpy(buffer, diskbuf + lba_start * 512, lba_count * 512);
-	return VBERROR_SUCCESS;
+	return VB2_SUCCESS;
 }
 
-VbError_t VbExDiskWrite(VbExDiskHandle_t handle, uint64_t lba_start,
-			uint64_t lba_count, const void *buffer)
+vb2_error_t VbExDiskWrite(vb2ex_disk_handle_t handle, uint64_t lba_start,
+			  uint64_t lba_count, const void *buffer)
 {
-	if (handle != (VbExDiskHandle_t)1)
-		return VBERROR_UNKNOWN;
-	if (lba_start >= params.streaming_lba_count)
-		return VBERROR_UNKNOWN;
-	if (lba_start + lba_count > params.streaming_lba_count)
-		return VBERROR_UNKNOWN;
+	if (handle != (vb2ex_disk_handle_t)1)
+		return VB2_ERROR_UNKNOWN;
+	if (lba_start >= disk_info.streaming_lba_count)
+		return VB2_ERROR_UNKNOWN;
+	if (lba_start + lba_count > disk_info.streaming_lba_count)
+		return VB2_ERROR_UNKNOWN;
 
 	memcpy(diskbuf + lba_start * 512, buffer, lba_count * 512);
-	return VBERROR_SUCCESS;
+	return VB2_SUCCESS;
 }
 
 static void print_help(const char *progname)
@@ -60,9 +60,10 @@ static void print_help(const char *progname)
 
 int main(int argc, char *argv[])
 {
-	VbPublicKey *kernkey;
+	uint8_t *kernkey = NULL;
+	uint64_t kernkey_size = 0;
 	uint64_t disk_bytes = 0;
-	int rv;
+	vb2_error_t rv;
 
 	if (argc < 3) {
 		print_help(argv[0]);
@@ -78,24 +79,17 @@ int main(int argc, char *argv[])
 	}
 
 	/* Read public key */
-	kernkey = PublicKeyRead(argv[2]);
+	kernkey = ReadFile(argv[2], &kernkey_size);
 	if (!kernkey) {
 		fprintf(stderr, "Can't read key file %s\n", argv[2]);
 		return 1;
 	}
 
-	/* Set up shared data blob */
-	VbSharedDataInit(shared, sizeof(shared_data));
-	VbSharedDataSetKernelKey(shared, kernkey);
-	/* TODO: optional TPM current kernel version */
-
 	/* Set up params */
-	params.shared_data_blob = shared_data;
-	params.shared_data_size = sizeof(shared_data);
-	params.disk_handle = (VbExDiskHandle_t)1;
-	params.bytes_per_lba = 512;
-	params.streaming_lba_count = disk_bytes / 512;
-	params.gpt_lba_count = params.streaming_lba_count;
+	disk_info.handle = (vb2ex_disk_handle_t)1;
+	disk_info.bytes_per_lba = 512;
+	disk_info.streaming_lba_count = disk_bytes / 512;
+	disk_info.lba_count = disk_info.streaming_lba_count;
 
 	params.kernel_buffer_size = 16 * 1024 * 1024;
 	params.kernel_buffer = malloc(params.kernel_buffer_size);
@@ -104,33 +98,35 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	/* GBB and cparams only needed by LoadKernel() in recovery mode */
-	params.gbb_data = NULL;
-	params.gbb_size = 0;
-
 	/* TODO(chromium:441893): support dev-mode flag and external gpt flag */
-	params.boot_flags = 0;
+	disk_info.flags = 0;
 
-	/*
-	 * LoadKernel() cares only about VBNV_DEV_BOOT_SIGNED_ONLY, and only in
-	 * dev mode.  So just use defaults.
-	 */
-	VbNvSetup(&nvc);
-	params.nv_context = &nvc;
+	if (vb2api_init(&workbuf, sizeof(workbuf), &ctx)) {
+		fprintf(stderr, "Can't initialize workbuf\n");
+		return 1;
+	}
+
+	rv = vb2api_inject_kernel_subkey(ctx, kernkey, kernkey_size);
+	if (rv != VB2_SUCCESS) {
+		fprintf(stderr, "vb2api_inject_kernel_subkey failed: %x\n",
+			rv);
+		return 1;
+	}
 
 	/* Try loading kernel */
-	rv = LoadKernel(&params, &cparams);
-	if (rv != VBERROR_SUCCESS) {
-		fprintf(stderr, "LoadKernel() failed with code %d\n", rv);
+	rv = vb2api_load_kernel(ctx, &params, &disk_info);
+	if (rv != VB2_SUCCESS) {
+		fprintf(stderr, "vb2api_load_kernel() failed with code %x\n",
+			rv);
 		return 1;
 	}
 
 	printf("Found a good kernel.\n");
-	printf("Partition number:   %d\n", (int)params.partition_number);
-	printf("Bootloader address: 0x%" PRIx64 "\n",
-	       params.bootloader_address);
+	printf("Partition number:   %u\n", params.partition_number);
+	printf("Bootloader offset: 0x%" PRIx64 "\n",
+	       params.bootloader_offset);
 
-	/* TODO: print other things (partition GUID, nv_context, shared_data) */
+	/* TODO: print other things (partition GUID, shared_data) */
 
 	printf("Yaay!\n");
 	return 0;

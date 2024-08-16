@@ -1,13 +1,17 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-#ifndef VBOOT_REFERENCE_CGPT_MISC_H_
-#define VBOOT_REFERENCE_CGPT_MISC_H_
+#ifndef VBOOT_REFERENCE_GPT_MISC_H_
+#define VBOOT_REFERENCE_GPT_MISC_H_
 
 #include "gpt.h"
 #include "vboot_api.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif  /* __cplusplus */
 
 enum {
 	GPT_SUCCESS = 0,
@@ -51,12 +55,12 @@ enum {
 	 */
 	GPT_UPDATE_ENTRY_BAD = 2,
 	/*
-	 * Used for fastboot mode. When an image is written to kernel partition,
-	 * its GPT entry is marked with S1,P1,T15.
+	 * Used for fastboot mode. If kernel partition slot is marked active,
+	 * its GPT entry is marked with S1,P2,T0.
 	 */
-	GPT_UPDATE_ENTRY_RESET = 3,
+	GPT_UPDATE_ENTRY_ACTIVE = 3,
 	/*
-	 * Used for fastboot mode. When an image is written to kernel partition,
+	 * Used for fastboot mode. If kernel partition slot is marked invalid,
 	 * its GPT entry is marked with S0,P0,T0.
 	 */
 	GPT_UPDATE_ENTRY_INVALID = 4,
@@ -72,9 +76,8 @@ enum {
  * depthcharge does not have logic to properly setup stored_on_device and
  * gpt_drive_sectors, but it does do a memset(gpt, 0, sizeof(GptData)). And so,
  * GPT_STORED_ON_DEVICE should be 0 to make stored_on_device compatible with
- * present behavior. At the same time, in vboot_kernel:LoadKernel(), and
- * cgpt_common:GptLoad(), we need to have simple shims to set gpt_drive_sectors
- * to drive_sectors.
+ * present behavior. At the same time, in vb2api_load_kernel() and GptLoad(),
+ * we need to have simple shims to set gpt_drive_sectors to drive_sectors.
  *
  * TODO(namnguyen): Remove those shims when the firmware can set these fields.
  */
@@ -84,9 +87,9 @@ typedef struct {
 	uint8_t *primary_header;
 	/* GPT secondary header, from last sector of disk (size: 512 bytes) */
 	uint8_t *secondary_header;
-	/* Primary GPT table, follows primary header (size: 16 KB) */
+	/* Primary GPT table, follows primary header */
 	uint8_t *primary_entries;
-	/* Secondary GPT table, precedes secondary header (size: 16 KB) */
+	/* Secondary GPT table, precedes secondary header */
 	uint8_t *secondary_entries;
 	/* Size of a LBA sector, in bytes */
 	uint32_t sector_bytes;
@@ -108,7 +111,7 @@ typedef struct {
 	int current_kernel;
 
 	/* Internal variables */
-	uint32_t valid_headers, valid_entries;
+	uint8_t valid_headers, valid_entries, ignored;
 	int current_priority;
 } GptData;
 
@@ -153,12 +156,12 @@ GptEntry *GptFindNthEntry(GptData *gpt, const Guid *guid, unsigned int n);
  *
  * Returns 0 if successful, 1 if error.
  */
-int AllocAndReadGptData(VbExDiskHandle_t disk_handle, GptData *gptdata);
+int AllocAndReadGptData(vb2ex_disk_handle_t disk_handle, GptData *gptdata);
 
 /**
  * Write any changes for the GPT data back to the drive, then free the buffers.
  */
-int WriteAndFreeGptData(VbExDiskHandle_t disk_handle, GptData *gptdata);
+int WriteAndFreeGptData(vb2ex_disk_handle_t disk_handle, GptData *gptdata);
 
 /**
  * Return 1 if the entry is unused, 0 if it is used.
@@ -196,4 +199,23 @@ int GptUpdateKernelWithEntry(GptData *gpt, GptEntry *e, uint32_t update_type);
  */
 int GptUpdateKernelEntry(GptData *gpt, uint32_t update_type);
 
-#endif  /* VBOOT_REFERENCE_CGPT_MISC_H_ */
+/* Getters and setters for partition attribute fields. */
+
+int GetEntryRequired(const GptEntry *e);
+int GetEntryLegacyBoot(const GptEntry *e);
+int GetEntrySuccessful(const GptEntry *e);
+int GetEntryPriority(const GptEntry *e);
+int GetEntryTries(const GptEntry *e);
+int GetEntryErrorCounter(const GptEntry *e);
+void SetEntryRequired(GptEntry *e, int required);
+void SetEntryLegacyBoot(GptEntry *e, int legacy_boot);
+void SetEntrySuccessful(GptEntry *e, int successful);
+void SetEntryPriority(GptEntry *e, int priority);
+void SetEntryTries(GptEntry *e, int tries);
+void SetEntryErrorCounter(GptEntry *e, int error_counter);
+
+#ifdef __cplusplus
+}
+#endif  /* __cplusplus */
+
+#endif  /* VBOOT_REFERENCE_GPT_MISC_H_ */

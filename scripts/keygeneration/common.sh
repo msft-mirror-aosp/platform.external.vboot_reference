@@ -1,11 +1,34 @@
 #!/bin/bash
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 # Common key generation functions.
 
-SCRIPT_DIR="$(dirname "$0")"
+SCRIPT_DIR="$(dirname "$(readlink -f -- "$0")")"
+PROG=$(basename "$0")
+CROS_LOG_PREFIX="${PROG}: "
+
+# Prints an informational message.
+info() {
+  echo "${CROS_LOG_PREFIX}INFO: $*" >&2
+}
+
+# Prints a warning message.
+warn() {
+  echo "${CROS_LOG_PREFIX}WARNING: $*" >&2
+}
+
+# Prints an error message.
+error() {
+  echo "${CROS_LOG_PREFIX}ERROR: $*" >&2
+}
+
+# Print an error message and then exit the script.
+die() {
+  error "$@"
+  exit 1
+}
 
 # Algorithm ID mappings:
 RSA1024_SHA1_ALGOID=0
@@ -25,28 +48,48 @@ alg_to_keylen() {
 }
 
 # Default algorithms.
-EC_ROOT_KEY_ALGOID=${RSA4096_SHA256_ALGOID}
-EC_DATAKEY_ALGOID=${RSA4096_SHA256_ALGOID}
-
-ROOT_KEY_ALGOID=${RSA8192_SHA512_ALGOID}
-RECOVERY_KEY_ALGOID=${RSA8192_SHA512_ALGOID}
+ROOT_KEY_ALGOID=${RSA4096_SHA512_ALGOID}
+RECOVERY_KEY_ALGOID=${RSA4096_SHA512_ALGOID}
 
 FIRMWARE_DATAKEY_ALGOID=${RSA4096_SHA256_ALGOID}
 DEV_FIRMWARE_DATAKEY_ALGOID=${RSA4096_SHA256_ALGOID}
 
-RECOVERY_KERNEL_ALGOID=${RSA8192_SHA512_ALGOID}
-INSTALLER_KERNEL_ALGOID=${RSA8192_SHA512_ALGOID}
+RECOVERY_KERNEL_ALGOID=${RSA4096_SHA512_ALGOID}
+MINIOS_KERNEL_ALGOID=${RSA4096_SHA512_ALGOID}
+INSTALLER_KERNEL_ALGOID=${RSA4096_SHA512_ALGOID}
 KERNEL_SUBKEY_ALGOID=${RSA4096_SHA256_ALGOID}
 KERNEL_DATAKEY_ALGOID=${RSA2048_SHA256_ALGOID}
 
+# AP RO Verification.
+ARV_ROOT_ALGOID=${RSA4096_SHA256_ALGOID}
+ARV_PLATFORM_ALGOID=${RSA4096_SHA256_ALGOID}
+ARV_ROOT_NAME_BASE="arv_root"
+# Presumably the script is run from the top of the PreMP keys directory
+# tree, place AP RO verification root key there.
+ARV_ROOT_DIR="ApRoV1Signing-PreMP"
+
 # Keyblock modes determine which boot modes a signing key is valid for use
 # in verification.
-EC_KEYBLOCK_MODE=7  # Only allow RW EC firmware in non-recovery.
-FIRMWARE_KEYBLOCK_MODE=7  # Only allow RW firmware in non-recovery.
-DEV_FIRMWARE_KEYBLOCK_MODE=6  # Only allow in dev mode.
-RECOVERY_KERNEL_KEYBLOCK_MODE=11 # Only in recovery mode.
-KERNEL_KEYBLOCK_MODE=7  # Only allow in non-recovery.
-INSTALLER_KERNEL_KEYBLOCK_MODE=10  # Only allow in Dev + Recovery.
+#    !DEV 0x1      DEV 0x2
+#    !REC 0x4      REC 0x8
+# !MINIOS 0x10  MINIOS 0x20
+# Note that firmware keyblock modes are not used.  Consider deprecating.
+
+# Only allow RW firmware in non-recovery + non-miniOS.
+FIRMWARE_KEYBLOCK_MODE=$((0x1 | 0x2 | 0x4 | 0x10))
+# Only allow in dev mode + non-recovery + non-miniOS.
+DEV_FIRMWARE_KEYBLOCK_MODE=$((0x2 | 0x4 | 0x10))
+# Only allow in recovery mode + non-miniOS.
+RECOVERY_KERNEL_KEYBLOCK_MODE=$((0x1 | 0x2 | 0x8 | 0x10))
+# Only allow in recovery mode + miniOS.
+MINIOS_KERNEL_KEYBLOCK_MODE=$((0x1 | 0x2 | 0x8 | 0x20))
+# Only allow in non-recovery + non-miniOS.
+KERNEL_KEYBLOCK_MODE=$((0x1 | 0x2 | 0x4 | 0x10))
+# Only allow in dev + recovery + non-miniOS.
+INSTALLER_KERNEL_KEYBLOCK_MODE=$((0x2 | 0x8 | 0x10))
+# Only allow in non-recovery + non-miniOS, does not mean much for AP RO keys.
+ARV_KEYBLOCK_MODE=$((0x1 | 0x2 | 0x4 | 0x10))
+
 
 # Emit .vbpubk and .vbprivk using given basename and algorithm
 # NOTE: This function also appears in ../../utility/dev_make_keypair. Making
@@ -54,7 +97,7 @@ INSTALLER_KERNEL_KEYBLOCK_MODE=10  # Only allow in Dev + Recovery.
 # likely to cause problems than just keeping an eye out for any differences. If
 # you feel the need to change this file, check the history of that other file
 # to see what may need updating here too.
-function make_pair {
+make_pair() {
   local base=$1
   local alg=$2
   local key_version=${3:-1}
@@ -87,6 +130,14 @@ function make_pair {
   rm -f "${base}_${len}.pem" "${base}_${len}.crt" "${base}_${len}.keyb"
 }
 
+# Used to generate keys for signing update payloads.
+make_au_payload_key() {
+  local dir=$1
+  local priv="${dir}/update_key.pem"
+  local pub="${dir}/update-payload-key-pub.pem"
+  openssl genrsa -out "${priv}" 2048
+  openssl rsa -pubout -in "${priv}" -out "${pub}"
+}
 
 # Emit a .keyblock containing flags and a public key, signed by a private key
 # flags are the bitwise OR of these (passed in decimal, though)
@@ -94,11 +145,25 @@ function make_pair {
 #   0x02  Developer switch on
 #   0x04  Not recovery mode
 #   0x08  Recovery mode
-function make_keyblock {
+#   0x10  Not miniOS mode
+#   0x20  miniOS mode
+make_keyblock() {
   local base=$1
   local flags=$2
   local pubkey=$3
-  local signkey=$4
+  # (Local) path to the key we're using to sign the keyblock.
+  # This is required, since the public key (as specified with --signpubkey)
+  # must always be local.
+  local signkey_path=$4
+  # Remote URI to the key we're using to sign the keyblock.
+  # Optional, if not set we'll look for the private key in signkey_path.
+  local signkey_uri=$5
+
+  local signkey_priv="${signkey_path}.vbprivk"
+  # If the URI is set, the private key is remote.
+  if [[ -n "${signkey_uri}" ]]; then
+    signkey_priv="${signkey_uri}"
+  fi
 
   echo "creating $base keyblock..."
 
@@ -107,12 +172,12 @@ function make_keyblock {
     --pack "${base}.keyblock" \
     --flags $flags \
     --datapubkey "${pubkey}.vbpubk" \
-    --signprivate "${signkey}.vbprivk"
+    --signprivate "${signkey_priv}"
 
   # verify it
   vbutil_keyblock \
     --unpack "${base}.keyblock" \
-    --signpubkey "${signkey}.vbpubk"
+    --signpubkey "${signkey_path}.vbpubk"
 }
 
 # File to read current versions from.
@@ -120,7 +185,9 @@ VERSION_FILE="key.versions"
 
 # ARGS: <VERSION_TYPE> [VERSION_FILE]
 get_version() {
-  awk -F= '/^'$1'\>/ { print $NF }' "${2:-${VERSION_FILE}}"
+  local key="$1"
+  local file="${2:-${VERSION_FILE}}"
+  awk -F= -vkey="${key}" '$1 == key { print $NF }' "${file}"
 }
 
 # Loads the current versions prints them to stdout and sets the global version
@@ -233,4 +300,16 @@ increment_version() {
     return 1
   fi
   echo ${new_version}
+}
+
+# Create a new ed25519 key pair given a base name. For example, if the
+# base is "dir/foo", this will create "dir/foo.priv.pem" and
+# "dir/foo.pub.pem".
+# Args: BASE
+generate_ed25519_key() {
+  local base="$1"
+
+  # Generate ed25519 private and public key.
+  openssl genpkey -algorithm Ed25519 -out "${base}.priv.pem"
+  openssl pkey -in "${base}.priv.pem" -pubout -text_pub -out "${base}.pub.pem"
 }

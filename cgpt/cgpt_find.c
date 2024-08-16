@@ -1,21 +1,20 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
+#include <ctype.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 #include "cgpt.h"
-#include "cgpt_nor.h"
 #include "cgptlib_internal.h"
+#include "cgpt_nor.h"
 #include "vboot_host.h"
 
 #define BUFSIZE 1024
-// FIXME: currently we only support 512-byte sectors.
-#define LBA_SIZE 512
-
 
 // fill comparebuf with the data to be examined, returning true on success.
 static int FillBuffer(CgptFindParams *params, int fd, uint64_t pos,
@@ -47,15 +46,15 @@ static int match_content(CgptFindParams *params, struct drive *drive,
     return 1;
 
   // Ensure that the region we want to match against is inside the partition.
-  part_size = LBA_SIZE * (entry->ending_lba - entry->starting_lba + 1);
+  part_size = drive->gpt.sector_bytes *
+    (entry->ending_lba - entry->starting_lba + 1);
   if (params->matchoffset + params->matchlen > part_size) {
     return 0;
   }
 
   // Read the partition data.
-  if (!FillBuffer(params,
-                  drive->fd,
-                  (LBA_SIZE * entry->starting_lba) + params->matchoffset,
+  if (!FillBuffer(params, drive->fd,
+    (drive->gpt.sector_bytes * entry->starting_lba) + params->matchoffset,
                   params->matchlen)) {
     Error("unable to read partition data\n");
     return 0;
@@ -71,10 +70,17 @@ static int match_content(CgptFindParams *params, struct drive *drive,
 }
 
 // This needs to handle /dev/mmcblk0 -> /dev/mmcblk0p3, /dev/sda -> /dev/sda3
-static void showmatch(CgptFindParams *params, char *filename,
+static void showmatch(CgptFindParams *params, const char *filename,
                       int partnum, GptEntry *entry) {
-  char * format = "%s%d\n";
-  if (strncmp("/dev/mmcblk", filename, 11) == 0)
+  const char * format = "%s%d\n";
+
+  /*
+   * Follow convention from disk_name() in kernel block/partition-generic.c
+   * code:
+   * If the last digit of the device name is a number, add a 'p' between the
+   * device name and the partition number.
+   */
+  if (isdigit(filename[strlen(filename) - 1]))
     format = "%sp%d\n";
 
   if (params->numeric) {
@@ -90,31 +96,18 @@ static void showmatch(CgptFindParams *params, char *filename,
     EntryDetails(entry, partnum - 1, params->numeric);
 }
 
-// This handles the MTD devices. ChromeOS uses /dev/mtdX for kernel partitions,
-// /dev/ubiblockX_0 for root partitions, and /dev/ubiX for stateful partition.
-static void chromeos_mtd_show(CgptFindParams *params, char *filename,
-                              int partnum, GptEntry *entry) {
-  if (GuidEqual(&guid_chromeos_kernel, &entry->type)) {
-    printf("/dev/mtd%d\n", partnum);
-  } else if (GuidEqual(&guid_chromeos_rootfs, &entry->type)) {
-    printf("/dev/ubiblock%d_0\n", partnum);
-  } else {
-    printf("/dev/ubi%d_0\n", partnum);
-  }
-}
-
 // This returns true if a GPT partition matches the search criteria. If a match
 // isn't found (or if the file doesn't contain a GPT), it returns false. The
 // filename and partition number that matched is left in a global, since we
 // could have multiple hits.
 static int gpt_search(CgptFindParams *params, struct drive *drive,
-                      char *filename) {
+                      const char *filename) {
   int i;
   GptEntry *entry;
   int retval = 0;
   char partlabel[GPT_PARTNAME_LEN];
 
-  if (GPT_SUCCESS != GptSanityCheck(&drive->gpt)) {
+  if (GPT_SUCCESS != GptValidityCheck(&drive->gpt)) {
     return 0;
   }
 
@@ -150,7 +143,7 @@ static int gpt_search(CgptFindParams *params, struct drive *drive,
   return retval;
 }
 
-static int do_search(CgptFindParams *params, char *fileName) {
+static int do_search(CgptFindParams *params, const char *fileName) {
   int retval;
   struct drive drive;
 
@@ -169,6 +162,7 @@ static int do_search(CgptFindParams *params, char *fileName) {
 #define PROC_PARTITIONS "/proc/partitions"
 #define DEV_DIR "/dev"
 #define SYS_BLOCK_DIR "/sys/block"
+#define MAX_PARTITION_NAME_LEN 128
 
 static const char *devdirs[] = { "/dev", "/devices", "/devfs", 0 };
 
@@ -207,41 +201,29 @@ static char *is_wholedev(const char *basename) {
   return 0;
 }
 
-// This scans all the physical devices it can find, looking for a match. It
-// returns true if any matches were found, false otherwise.
-static int scan_real_devs(CgptFindParams *params) {
-  int found = 0;
-  char partname[128];                   // max size for /proc/partition lines?
-  FILE *fp;
-  char *pathname;
-
-  fp = fopen(PROC_PARTITIONS, "re");
-  if (!fp) {
-    perror("can't read " PROC_PARTITIONS);
-    return found;
+#ifdef GPT_SPI_NOR
+// This handles the MTD devices. ChromeOS uses /dev/mtdX for kernel partitions,
+// /dev/ubiblockX_0 for root partitions, and /dev/ubiX for stateful partition.
+static void chromeos_mtd_show(CgptFindParams *params, const char *filename,
+                              int partnum, GptEntry *entry) {
+  if (GuidEqual(&guid_chromeos_kernel, &entry->type)) {
+    printf("/dev/mtd%d\n", partnum);
+  } else if (GuidEqual(&guid_chromeos_rootfs, &entry->type)) {
+    printf("/dev/ubiblock%d_0\n", partnum);
+  } else {
+    printf("/dev/ubi%d_0\n", partnum);
   }
+}
 
+static int scan_spi_gpt(CgptFindParams *params) {
+  int found = 0;
+  char partname[MAX_PARTITION_NAME_LEN];
+  FILE *fp;
   size_t line_length = 0;
   char *line = NULL;
-  while (getline(&line, &line_length, fp) != -1) {
-    int ma, mi;
-    long long unsigned int sz;
-
-    if (sscanf(line, " %d %d %llu %127[^\n ]", &ma, &mi, &sz, partname) != 4)
-      continue;
-
-    if ((pathname = is_wholedev(partname))) {
-      if (do_search(params, pathname)) {
-        found++;
-      }
-    }
-  }
-
-  fclose(fp);
 
   fp = fopen(PROC_MTD, "re");
   if (!fp) {
-    free(line);
     return found;
   }
 
@@ -261,8 +243,14 @@ static int scan_real_devs(CgptFindParams *params) {
           goto cleanup;
         }
       }
+      // Create a temp dir to work in.
+      if (mkdtemp(temp_dir) == NULL) {
+        perror("Cannot create a temporary directory.\n");
+        goto cleanup;
+      }
       if (ReadNorFlash(temp_dir) != 0) {
         perror("ReadNorFlash");
+        RemoveDir(temp_dir);
         goto cleanup;
       }
       char nor_file[64];
@@ -280,6 +268,60 @@ static int scan_real_devs(CgptFindParams *params) {
 cleanup:
   fclose(fp);
   free(line);
+  return found;
+}
+#else
+// Stub
+static int scan_spi_gpt(CgptFindParams *params) {
+  return 0;
+}
+#endif
+
+// This scans all the physical devices it can find, looking for a match. It
+// returns true if any matches were found, false otherwise.
+static int scan_real_devs(CgptFindParams *params) {
+  int found = 0;
+  char partname[MAX_PARTITION_NAME_LEN];
+  char partname_prev[MAX_PARTITION_NAME_LEN];
+  FILE *fp;
+  char *pathname;
+
+  fp = fopen(PROC_PARTITIONS, "re");
+  if (!fp) {
+    perror("can't read " PROC_PARTITIONS);
+    return found;
+  }
+
+  size_t line_length = 0;
+  char *line = NULL;
+  partname_prev[0] = '\0';
+  while (getline(&line, &line_length, fp) != -1) {
+    int ma, mi;
+    long long unsigned int sz;
+
+    if (sscanf(line, " %d %d %llu %127[^\n ]", &ma, &mi, &sz, partname) != 4)
+      continue;
+
+    /* Only check devices that have partitions under them.
+     * We can tell by checking that an entry like "sda" is immediately
+     * followed by one like "sda0". */
+    if (!strncmp(partname_prev, partname, strlen(partname_prev)) &&
+        strlen(partname_prev)) {
+      if ((pathname = is_wholedev(partname_prev))) {
+        if (do_search(params, pathname)) {
+          found++;
+        }
+      }
+    }
+
+    strcpy(partname_prev, partname);
+  }
+
+  fclose(fp);
+  free(line);
+
+  found += scan_spi_gpt(params);
+
   return found;
 }
 

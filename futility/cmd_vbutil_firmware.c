@@ -1,4 +1,4 @@
-/* Copyright 2011 The Chromium OS Authors. All rights reserved.
+/* Copyright 2011 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -12,12 +12,16 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include "cryptolib.h"
+#include "2api.h"
+#include "2common.h"
+#include "2rsa.h"
+#include "2sysincludes.h"
 #include "futility.h"
 #include "host_common.h"
+#include "host_key21.h"
 #include "kernel_blob.h"
 #include "util_misc.h"
-#include "vboot_common.h"
+#include "vb1_helper.h"
 
 /* Command line options */
 enum {
@@ -30,6 +34,7 @@ enum {
 	OPT_FV,
 	OPT_KERNELKEY,
 	OPT_FLAGS,
+	OPT_HELP,
 };
 
 static const struct option long_opts[] = {
@@ -42,17 +47,18 @@ static const struct option long_opts[] = {
 	{"fv", 1, 0, OPT_FV},
 	{"kernelkey", 1, 0, OPT_KERNELKEY},
 	{"flags", 1, 0, OPT_FLAGS},
+	{"help", 0, 0, OPT_HELP},
 	{NULL, 0, 0, 0}
 };
 
 /* Print help and return error */
-static void print_help(const char *prog)
+static void print_help(int argc, char *argv[])
 {
 	printf("\nUsage:  " MYNAME " %s <--vblock|--verify> <file> [OPTIONS]\n"
 	       "\n"
 	       "For '--vblock <file>', required OPTIONS are:\n"
 	       "\n"
-	       "  --keyblock <file>           Key block in .keyblock format\n"
+	       "  --keyblock <file>           Keyblock in .keyblock format\n"
 	       "  --signprivate <file>"
 	       "        Signing private key in .vbprivk format\n"
 	       "  --version <number>          Firmware version\n"
@@ -71,242 +77,265 @@ static void print_help(const char *prog)
 	       "For '--verify <file>', optional OPTIONS are:\n"
 	       "  --kernelkey <file>"
 	       "          Write the kernel subkey to this file\n\n",
-	       prog);
+	       argv[0]);
 }
 
 /* Create a firmware .vblock */
-static int Vblock(const char *outfile, const char *keyblock_file,
-		  const char *signprivate, uint64_t version,
-		  const char *fv_file, const char *kernelkey_file,
-		  uint32_t preamble_flags)
+static int do_vblock(const char *outfile, const char *keyblock_file,
+		     const char *signprivate, uint32_t version,
+		     const char *fv_file, const char *kernelkey_file,
+		     uint32_t preamble_flags)
 {
-
-	VbPrivateKey *signing_key;
-	VbPublicKey *kernel_subkey;
-	VbSignature *body_sig;
-	VbFirmwarePreambleHeader *preamble;
-	VbKeyBlockHeader *key_block;
-	uint64_t key_block_size;
-	uint8_t *fv_data;
-	uint64_t fv_size;
-	FILE *f;
-	uint64_t i;
+	struct vb2_keyblock *keyblock = NULL;
+	struct vb2_private_key *signing_key = NULL;
+	struct vb2_packed_key *kernel_subkey = NULL;
+	struct vb2_signature *body_sig = NULL;
+	struct vb2_fw_preamble *preamble = NULL;
+	uint8_t *fv_data = NULL;
+	int retval = 1;
 
 	if (!outfile) {
-		VbExError("Must specify output filename\n");
-		return 1;
+		FATAL("Must specify output filename\n");
+		goto vblock_cleanup;
 	}
 	if (!keyblock_file || !signprivate || !kernelkey_file) {
-		VbExError("Must specify all keys\n");
-		return 1;
+		FATAL("Must specify all keys\n");
+		goto vblock_cleanup;
 	}
 	if (!fv_file) {
-		VbExError("Must specify firmware volume\n");
-		return 1;
+		FATAL("Must specify firmware volume\n");
+		goto vblock_cleanup;
 	}
 
-	/* Read the key block and keys */
-	key_block =
-	    (VbKeyBlockHeader *) ReadFile(keyblock_file, &key_block_size);
-	if (!key_block) {
-		VbExError("Error reading key block.\n");
-		return 1;
+	/* Read the keyblock and keys */
+	keyblock = vb2_read_keyblock(keyblock_file);
+	if (!keyblock) {
+		FATAL("Error reading keyblock.\n");
+		goto vblock_cleanup;
 	}
 
-	signing_key = PrivateKeyRead(signprivate);
+	signing_key = vb2_read_private_key(signprivate);
 	if (!signing_key) {
-		VbExError("Error reading signing key.\n");
-		return 1;
+		FATAL("Error reading signing key.\n");
+		goto vblock_cleanup;
 	}
 
-	kernel_subkey = PublicKeyRead(kernelkey_file);
+	kernel_subkey = vb2_read_packed_key(kernelkey_file);
 	if (!kernel_subkey) {
-		VbExError("Error reading kernel subkey.\n");
-		return 1;
+		FATAL("Error reading kernel subkey.\n");
+		goto vblock_cleanup;
 	}
 
 	/* Read and sign the firmware volume */
-	fv_data = ReadFile(fv_file, &fv_size);
-	if (!fv_data)
-		return 1;
+	uint32_t fv_size;
+	if (VB2_SUCCESS != vb2_read_file(fv_file, &fv_data, &fv_size))
+		goto vblock_cleanup;
 	if (!fv_size) {
-		VbExError("Empty firmware volume file\n");
-		return 1;
+		FATAL("Empty firmware volume file\n");
+		goto vblock_cleanup;
 	}
-	body_sig = CalculateSignature(fv_data, fv_size, signing_key);
+	body_sig = vb2_calculate_signature(fv_data, fv_size, signing_key);
 	if (!body_sig) {
-		VbExError("Error calculating body signature\n");
-		return 1;
+		FATAL("Error calculating body signature\n");
+		goto vblock_cleanup;
 	}
-	free(fv_data);
 
 	/* Create preamble */
-	preamble = CreateFirmwarePreamble(version,
-					  kernel_subkey,
-					  body_sig,
+	preamble = vb2_create_fw_preamble(version, kernel_subkey, body_sig,
 					  signing_key, preamble_flags);
 	if (!preamble) {
-		VbExError("Error creating preamble.\n");
-		return 1;
+		FATAL("Error creating preamble.\n");
+		goto vblock_cleanup;
 	}
 
 	/* Write the output file */
-	f = fopen(outfile, "wb");
+	FILE *f = fopen(outfile, "wb");
 	if (!f) {
-		VbExError("Can't open output file %s\n", outfile);
-		return 1;
+		FATAL("Can't open output file %s\n", outfile);
+		goto vblock_cleanup;
 	}
-	i = ((1 != fwrite(key_block, key_block_size, 1, f)) ||
-	     (1 != fwrite(preamble, preamble->preamble_size, 1, f)));
+	int i = ((1 != fwrite(keyblock, keyblock->keyblock_size, 1, f)) ||
+		 (1 != fwrite(preamble, preamble->preamble_size, 1, f)));
 	fclose(f);
 	if (i) {
-		VbExError("Can't write output file %s\n", outfile);
+		FATAL("Can't write output file %s\n", outfile);
 		unlink(outfile);
-		return 1;
+		goto vblock_cleanup;
 	}
 
 	/* Success */
-	return 0;
+	retval = 0;
+
+vblock_cleanup:
+	if (keyblock)
+		free(keyblock);
+	if (signing_key)
+		free(signing_key);
+	if (kernel_subkey)
+		free(kernel_subkey);
+	if (fv_data)
+		free(fv_data);
+	if (body_sig)
+		free(body_sig);
+	if (preamble)
+		free(preamble);
+
+	return retval;
 }
 
-static int Verify(const char *infile, const char *signpubkey,
-		  const char *fv_file, const char *kernelkey_file)
+static int do_verify(const char *infile, const char *signpubkey,
+		     const char *fv_file, const char *kernelkey_file)
 {
+	uint8_t workbuf[VB2_FIRMWARE_WORKBUF_RECOMMENDED_SIZE]
+		__attribute__((aligned(VB2_WORKBUF_ALIGN)));
+	struct vb2_workbuf wb;
+	vb2_workbuf_init(&wb, workbuf, sizeof(workbuf));
 
-	VbKeyBlockHeader *key_block;
-	VbFirmwarePreambleHeader *preamble;
-	VbPublicKey *data_key;
-	VbPublicKey *sign_key;
-	VbPublicKey *kernel_subkey;
-	RSAPublicKey *rsa;
-	uint8_t *blob;
-	uint64_t blob_size;
-	uint8_t *fv_data;
-	uint64_t fv_size;
-	uint64_t now = 0;
-	uint32_t flags;
+	uint32_t now = 0;
+
+	uint8_t *pubkbuf = NULL;
+	uint8_t *blob = NULL;
+	uint8_t *fv_data = NULL;
+	int retval = 1;
 
 	if (!infile || !signpubkey || !fv_file) {
-		VbExError("Must specify filename, signpubkey, and fv\n");
-		return 1;
+		FATAL("Must specify filename, signpubkey, and fv\n");
+		goto verify_cleanup;
 	}
 
 	/* Read public signing key */
-	sign_key = PublicKeyRead(signpubkey);
-	if (!sign_key) {
-		VbExError("Error reading signpubkey.\n");
-		return 1;
+	uint32_t pubklen;
+	struct vb2_public_key sign_key;
+	if (VB2_SUCCESS != vb2_read_file(signpubkey, &pubkbuf, &pubklen)) {
+		ERROR("Reading signpubkey.\n");
+		goto verify_cleanup;
+	}
+	if (VB2_SUCCESS != vb2_unpack_key_buffer(&sign_key, pubkbuf, pubklen)) {
+		ERROR("Unpacking signpubkey.\n");
+		goto verify_cleanup;
 	}
 
 	/* Read blob */
-	blob = ReadFile(infile, &blob_size);
-	if (!blob) {
-		VbExError("Error reading input file\n");
-		return 1;
+	uint32_t blob_size;
+	if (VB2_SUCCESS != vb2_read_file(infile, &blob, &blob_size)) {
+		FATAL("Error reading input file\n");
+		goto verify_cleanup;
 	}
 
 	/* Read firmware volume */
-	fv_data = ReadFile(fv_file, &fv_size);
-	if (!fv_data) {
-		VbExError("Error reading firmware volume\n");
-		return 1;
+	uint32_t fv_size;
+	if (VB2_SUCCESS != vb2_read_file(fv_file, &fv_data, &fv_size)) {
+		FATAL("Error reading firmware volume\n");
+		goto verify_cleanup;
 	}
 
-	/* Verify key block */
-	key_block = (VbKeyBlockHeader *) blob;
-	if (0 != KeyBlockVerify(key_block, blob_size, sign_key, 0)) {
-		VbExError("Error verifying key block.\n");
-		return 1;
+	/* Verify keyblock */
+	struct vb2_keyblock *keyblock = (struct vb2_keyblock *)blob;
+	if (VB2_SUCCESS !=
+	    vb2_verify_keyblock(keyblock, blob_size, &sign_key, &wb)) {
+		FATAL("Error verifying keyblock.\n");
+		goto verify_cleanup;
 	}
-	free(sign_key);
-	now += key_block->key_block_size;
 
-	printf("Key block:\n");
-	data_key = &key_block->data_key;
-	printf("  Size:                %" PRIu64 "\n",
-	       key_block->key_block_size);
-	printf("  Flags:               %" PRIu64 " (ignored)\n",
-	       key_block->key_block_flags);
-	printf("  Data key algorithm:  %" PRIu64 " %s\n", data_key->algorithm,
-	       (data_key->algorithm <
-		kNumAlgorithms ? algo_strings[data_key->
-					      algorithm] : "(invalid)"));
-	printf("  Data key version:    %" PRIu64 "\n", data_key->key_version);
-	printf("  Data key sha1sum:    ");
-	PrintPubKeySha1Sum(data_key);
-	printf("\n");
+	now += keyblock->keyblock_size;
 
-	rsa = PublicKeyToRSA(&key_block->data_key);
-	if (!rsa) {
-		VbExError("Error parsing data key.\n");
-		return 1;
+	printf("Keyblock:\n");
+	printf("  Size:                %d\n", keyblock->keyblock_size);
+	printf("  Flags:               %d (ignored)\n",
+	       keyblock->keyblock_flags);
+
+	struct vb2_packed_key *packed_key = &keyblock->data_key;
+	printf("  Data key algorithm:  %d %s\n", packed_key->algorithm,
+	       vb2_get_crypto_algorithm_name(packed_key->algorithm));
+	printf("  Data key version:    %d\n", packed_key->key_version);
+	printf("  Data key sha1sum:    %s\n",
+	       packed_key_sha1_string(packed_key));
+
+	struct vb2_public_key data_key;
+	if (VB2_SUCCESS !=
+	    vb2_unpack_key(&data_key, &keyblock->data_key)) {
+		ERROR("Parsing data key.\n");
+		goto verify_cleanup;
 	}
 
 	/* Verify preamble */
-	preamble = (VbFirmwarePreambleHeader *) (blob + now);
-	if (0 != VerifyFirmwarePreamble(preamble, blob_size - now, rsa)) {
-		VbExError("Error verifying preamble.\n");
-		return 1;
+	struct vb2_fw_preamble *pre2 = (struct vb2_fw_preamble *)(blob + now);
+	if (VB2_SUCCESS !=
+	    vb2_verify_fw_preamble(pre2, blob_size - now, &data_key, &wb)) {
+		FATAL("Error2 verifying preamble.\n");
+		goto verify_cleanup;
 	}
-	now += preamble->preamble_size;
+	now += pre2->preamble_size;
 
-	flags = VbGetFirmwarePreambleFlags(preamble);
+	uint32_t flags = pre2->flags;
+	if (pre2->header_version_minor < 1)
+		flags = 0;  /* Old 2.0 structure didn't have flags */
+
 	printf("Preamble:\n");
-	printf("  Size:                  %" PRIu64 "\n",
-	       preamble->preamble_size);
-	printf("  Header version:        %" PRIu32 ".%" PRIu32 "\n",
-	       preamble->header_version_major, preamble->header_version_minor);
-	printf("  Firmware version:      %" PRIu64 "\n",
-	       preamble->firmware_version);
-	kernel_subkey = &preamble->kernel_subkey;
-	printf("  Kernel key algorithm:  %" PRIu64 " %s\n",
-	       kernel_subkey->algorithm,
-	       (kernel_subkey->algorithm < kNumAlgorithms ?
-		algo_strings[kernel_subkey->algorithm] : "(invalid)"));
-	printf("  Kernel key version:    %" PRIu64 "\n",
-	       kernel_subkey->key_version);
-	printf("  Kernel key sha1sum:    ");
-	PrintPubKeySha1Sum(kernel_subkey);
-	printf("\n");
-	printf("  Firmware body size:    %" PRIu64 "\n",
-	       preamble->body_signature.data_size);
-	printf("  Preamble flags:        %" PRIu32 "\n", flags);
+	printf("  Size:                  %d\n", pre2->preamble_size);
+	printf("  Header version:        %d.%d\n",
+	       pre2->header_version_major, pre2->header_version_minor);
+	printf("  Firmware version:      %d\n", pre2->firmware_version);
+
+	struct vb2_packed_key *kernel_subkey = &pre2->kernel_subkey;
+	printf("  Kernel key algorithm:  %d %s\n", kernel_subkey->algorithm,
+	       vb2_get_crypto_algorithm_name(kernel_subkey->algorithm));
+	printf("  Kernel key version:    %d\n", kernel_subkey->key_version);
+	printf("  Kernel key sha1sum:    %s\n",
+	       packed_key_sha1_string(kernel_subkey));
+	printf("  Firmware body size:    %d\n", pre2->body_signature.data_size);
+	printf("  Preamble flags:        %d\n", flags);
 
 	/* TODO: verify body size same as signature size */
 
 	/* Verify body */
-	if (flags & VB_FIRMWARE_PREAMBLE_USE_RO_NORMAL) {
-		printf
-		    ("Preamble requests USE_RO_NORMAL;"
-		     " skipping body verification.\n");
-	} else {
-		if (0 !=
-		    VerifyData(fv_data, fv_size, &preamble->body_signature,
-			       rsa)) {
-			VbExError("Error verifying firmware body.\n");
-			return 1;
-		}
+	if (flags & VB2_FIRMWARE_PREAMBLE_USE_RO_NORMAL) {
+		printf("Preamble requests USE_RO_NORMAL;"
+		       " skipping body verification.\n");
+	} else if (!pre2->body_signature.data_size) {
+		/* cbfstool needs the whole firmware image to get the
+		   metadata hash */
+		FATAL("Metadata hash verification not supported.\n"
+		      "Please use `futility verify BIOS_IMAGE`.\n");
+		goto verify_cleanup;
+	} else if (VB2_SUCCESS ==
+		   vb2_verify_data(fv_data, fv_size, &pre2->body_signature,
+				   &data_key, &wb)) {
 		printf("Body verification succeeded.\n");
+	} else {
+		FATAL("Error verifying firmware body.\n");
+		goto verify_cleanup;
 	}
 
-	if (kernelkey_file) {
-		if (0 != PublicKeyWrite(kernelkey_file, kernel_subkey)) {
-			VbExError("Unable to write kernel subkey\n");
-			return 1;
-		}
+	if (kernelkey_file &&
+	    VB2_SUCCESS != vb2_write_packed_key(kernelkey_file,
+						kernel_subkey)) {
+		FATAL("Unable to write kernel subkey\n");
+		goto verify_cleanup;
 	}
 
-	return 0;
+	/* Success */
+	retval = 0;
+
+verify_cleanup:
+	if (pubkbuf)
+		free(pubkbuf);
+	if (blob)
+		free(blob);
+	if (fv_data)
+		free(fv_data);
+
+	return retval;
 }
 
 static int do_vbutil_firmware(int argc, char *argv[])
 {
 
 	char *filename = NULL;
-	char *key_block_file = NULL;
+	char *keyblock_file = NULL;
 	char *signpubkey = NULL;
 	char *signprivate = NULL;
-	uint64_t version = 0;
+	uint32_t version = 0;
 	char *fv_file = NULL;
 	char *kernelkey_file = NULL;
 	uint32_t preamble_flags = 0;
@@ -322,6 +351,9 @@ static int do_vbutil_firmware(int argc, char *argv[])
 			printf("Unknown option\n");
 			parse_error = 1;
 			break;
+		case OPT_HELP:
+			print_help(argc, argv);
+			return !!parse_error;
 
 		case OPT_MODE_VBLOCK:
 		case OPT_MODE_VERIFY:
@@ -330,7 +362,7 @@ static int do_vbutil_firmware(int argc, char *argv[])
 			break;
 
 		case OPT_KEYBLOCK:
-			key_block_file = optarg;
+			keyblock_file = optarg;
 			break;
 
 		case OPT_SIGNPUBKEY:
@@ -368,24 +400,22 @@ static int do_vbutil_firmware(int argc, char *argv[])
 	}
 
 	if (parse_error) {
-		print_help(argv[0]);
+		print_help(argc, argv);
 		return 1;
 	}
 
 	switch (mode) {
 	case OPT_MODE_VBLOCK:
-		return Vblock(filename, key_block_file, signprivate, version,
-			      fv_file, kernelkey_file, preamble_flags);
+		return do_vblock(filename, keyblock_file, signprivate, version,
+				 fv_file, kernelkey_file, preamble_flags);
 	case OPT_MODE_VERIFY:
-		return Verify(filename, signpubkey, fv_file, kernelkey_file);
+		return do_verify(filename, signpubkey, fv_file, kernelkey_file);
 	default:
-		fprintf(stderr, "Must specify a mode.\n");
-		print_help(argv[0]);
+		ERROR("Must specify a mode.\n");
+		print_help(argc, argv);
 		return 1;
 	}
 }
 
-DECLARE_FUTIL_COMMAND(vbutil_firmware, do_vbutil_firmware,
-		      VBOOT_VERSION_1_0,
-		      "Verified boot firmware utility",
-		      print_help);
+DECLARE_FUTIL_COMMAND(vbutil_firmware, do_vbutil_firmware, VBOOT_VERSION_1_0,
+		      "Verified boot firmware utility");

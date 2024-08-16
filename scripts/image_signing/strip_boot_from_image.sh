@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+# Copyright 2013 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -13,7 +13,7 @@
 load_shflags
 
 DEFINE_string image "chromiumos_image.bin" \
-  "Input file name of Chrome OS image to strip /boot from."
+  "Input file name of Chrome OS image to strip /boot from, or path to rootfs."
 
 # Parse command line.
 FLAGS "$@" || exit 1
@@ -22,32 +22,31 @@ eval set -- "${FLAGS_ARGV}"
 # Abort on error.
 set -e
 
-if [ -z "${FLAGS_image}" ] || [ ! -s "${FLAGS_image}" ] ; then
-  die "Error: need a valid file by --image"
-fi
-
 # Swiped/modifed from $SRC/src/scripts/base_library/base_image_util.sh.
 zero_free_space() {
   local rootfs="$1"
 
-  echo "Zeroing freespace in ${rootfs}"
-  # dd is a silly thing and will produce a "No space left on device" message
-  # that cannot be turned off and is confusing to unsuspecting victims.
-  ( sudo dd if=/dev/zero of="${rootfs}/filler" bs=4096 conv=fdatasync \
-      status=noxfer || true ) 2>&1 | grep -v "No space left on device"
-  sudo rm "${rootfs}/filler"
+  info "Zeroing freespace in ${rootfs}"
+  sudo sfill -llzf "${rootfs}"
 }
 
 
 strip_boot() {
   local image=$1
 
-  # Mount image so we can modify it.
   local rootfs_dir=$(make_temp_dir)
-  mount_image_partition ${image} 3 ${rootfs_dir}
+  if [[ -b "${image}" ]]; then
+    enable_rw_mount "${image}"
+    sudo mount "${image}" "${rootfs_dir}"
+    tag_as_needs_to_be_resigned "${rootfs_dir}"
+  else
+    # Mount image so we can modify it.
+    local loopdev=$(loopback_partscan "${image}")
+    mount_loop_image_partition "${loopdev}" 3 "${rootfs_dir}"
+  fi
 
   sudo rm -rf "${rootfs_dir}/boot" &&
-    echo "/boot directory was removed."
+    info "/boot directory was removed."
 
   # To prevent the files we just removed from the FS from remaining as non-
   # zero trash blocks that bloat payload sizes, need to zero them. This was
@@ -56,9 +55,11 @@ strip_boot() {
   zero_free_space "${rootfs_dir}"
 }
 
-
 IMAGE=$(readlink -f "${FLAGS_image}")
-if [[ -z "${IMAGE}" || ! -f "${IMAGE}" ]]; then
+if [[ ! -f "${IMAGE}" && ! -b "${IMAGE}" ]]; then
+  IMAGE=
+fi
+if [[ -z "${IMAGE}" ]]; then
   die "Missing required argument: --from (image to update)"
 fi
 

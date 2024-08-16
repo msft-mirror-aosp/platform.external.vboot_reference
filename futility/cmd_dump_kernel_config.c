@@ -1,4 +1,4 @@
-/* Copyright 2012 The Chromium OS Authors. All rights reserved.
+/* Copyright 2012 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -15,21 +15,23 @@
 
 enum {
 	OPT_KLOADADDR = 1000,
+	OPT_HELP,
 };
 
 static const struct option long_opts[] = {
 	{"kloadaddr", 1, NULL, OPT_KLOADADDR},
+	{"help", 0, 0, OPT_HELP},
 	{NULL, 0, NULL, 0}
 };
 
 /* Print help and return error */
-static void PrintHelp(const char *progname)
+static void print_help(int argc, char *argv[])
 {
 	printf("\nUsage:  " MYNAME " %s [--kloadaddr ADDRESS] "
-	       "KERNEL_PARTITION\n\n", progname);
+	       "KERNEL_PARTITION\n\n", argv[0]);
 }
 
-static int do_dump_kernel_config(int argc, char *argv[])
+static int do_dump_kern_cfg(int argc, char *argv[])
 {
 	char *infile = NULL;
 	char *config = NULL;
@@ -54,26 +56,30 @@ static int do_dump_kernel_config(int argc, char *argv[])
 		case OPT_KLOADADDR:
 			kernel_body_load_address = strtoul(optarg, &e, 0);
 			if (!*optarg || (e && *e)) {
-				fprintf(stderr, "Invalid --kloadaddr\n");
+				ERROR("Invalid --kloadaddr\n");
 				parse_error = 1;
 			}
 			break;
+
+		case OPT_HELP:
+			print_help(argc, argv);
+			return 0;
 		}
 	}
 
 	if (optind >= argc) {
-		fprintf(stderr, "Expected argument after options\n");
+		ERROR("Expected argument after options\n");
 		parse_error = 1;
 	} else
 		infile = argv[optind];
 
 	if (parse_error) {
-		PrintHelp(argv[0]);
+		print_help(argc, argv);
 		return 1;
 	}
 
 	if (!infile || !*infile) {
-		fprintf(stderr, "Must specify filename\n");
+		ERROR("Must specify filename\n");
 		return 1;
 	}
 
@@ -87,7 +93,5 @@ static int do_dump_kernel_config(int argc, char *argv[])
 	return 0;
 }
 
-DECLARE_FUTIL_COMMAND(dump_kernel_config, do_dump_kernel_config,
-		      VBOOT_VERSION_ALL,
-		      "Prints the kernel command line",
-		      PrintHelp);
+DECLARE_FUTIL_COMMAND(dump_kernel_config, do_dump_kern_cfg, VBOOT_VERSION_ALL,
+		      "Prints the kernel command line");

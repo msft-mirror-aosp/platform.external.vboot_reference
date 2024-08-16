@@ -1,5 +1,4 @@
-/*
- * Copyright 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -17,7 +16,6 @@
 
 #include "futility.h"
 
-
 /******************************************************************************/
 /* Logging stuff */
 
@@ -30,9 +28,11 @@
 /* #define FORCE_LOGGING_ON */
 
 static int log_fd = -1;
+const char *ft_print_header = NULL;
+const char *ft_print_header2 = NULL;
 
 /* Write the string and a newline. Silently give up on errors */
-static void log_str(char *prefix, char *str)
+static void log_str(const char *prefix, const char *str)
 {
 	int len, done, n;
 
@@ -176,26 +176,20 @@ static void log_args(int argc, char *argv[])
 
 /******************************************************************************/
 
-/* Default is to support everything we can */
-enum vboot_version vboot_version = VBOOT_VERSION_ALL;
-
 static const char *const usage = "\n"
 "Usage: " MYNAME " [options] COMMAND [args...]\n"
 "\n"
-"This is the unified firmware utility, which will eventually replace\n"
-"most of the distinct verified boot tools formerly produced by the\n"
-"vboot_reference package.\n"
+"This is the unified firmware utility, which contains various of distinct\n"
+"verified boot tools as subcommands.\n"
 "\n"
-"When symlinked under the name of one of those previous tools, it should\n"
-"fully implement the original behavior. It can also be invoked directly\n"
-"as " MYNAME ", followed by the original name as the first argument.\n"
-"\n";
+"See the README file for more information about the available commands\n";
 
 static const char *const options =
 "Global options:\n"
 "\n"
 "  --vb1        Use only vboot v1.0 binary formats\n"
 "  --vb21       Use only vboot v2.1 binary formats\n"
+"  --debug      Be noisy about what's going on\n"
 "\n";
 
 static const struct futil_cmd_t *find_command(const char *name)
@@ -203,7 +197,8 @@ static const struct futil_cmd_t *find_command(const char *name)
 	const struct futil_cmd_t *const *cmd;
 
 	for (cmd = futil_cmds; *cmd; cmd++)
-		if (0 == strcmp((*cmd)->name, name))
+		if (((*cmd)->version & vboot_version) &&
+		    !strcmp((*cmd)->name, name))
 			return *cmd;
 
 	return NULL;
@@ -219,18 +214,29 @@ static void list_commands(void)
 			       (*cmd)->name, (*cmd)->shorthelp);
 }
 
+static int run_command(const struct futil_cmd_t *cmd, int argc, char *argv[])
+{
+	int i;
+	VB2_DEBUG("\"%s\" ...\n", cmd->name);
+	for (i = 0; i < argc; i++)
+		VB2_DEBUG("  argv[%d] = \"%s\"\n", i, argv[i]);
+
+	return cmd->handler(argc, argv);
+}
+
 static int do_help(int argc, char *argv[])
 {
 	const struct futil_cmd_t *cmd;
-	const char *vstr;
+	const char *vstr = "";
 
-	if (argc >= 2) {
+	/* Help about a known command? */
+	if (argc > 1) {
 		cmd = find_command(argv[1]);
 		if (cmd) {
-			printf("\n%s - %s\n", argv[1], cmd->shorthelp);
-			if (cmd->longhelp)
-				cmd->longhelp(argv[1]);
-			return 0;
+			/* Let the command provide its own help */
+			argv[0] = argv[1];
+			argv[1] = (char *)"--help";
+			return run_command(cmd, argc, argv);
 		}
 	}
 
@@ -258,31 +264,21 @@ static int do_help(int argc, char *argv[])
 }
 
 DECLARE_FUTIL_COMMAND(help, do_help, VBOOT_VERSION_ALL,
-		      "Show a bit of help (you're looking at it)",
-		      NULL);
+		      "Show a bit of help (you're looking at it)");
 
+static const char ver_help[] =
+	"Show the futility source revision and build date";
 static int do_version(int argc, char *argv[])
 {
-	printf("%s\n", futility_version);
+	if (argc > 1)
+		printf("%s - %s\n", argv[0], ver_help);
+	else
+		printf("%s\n", futility_version);
 	return 0;
 }
 
 DECLARE_FUTIL_COMMAND(version, do_version, VBOOT_VERSION_ALL,
-		      "Show the futility source revision and build date",
-		      NULL);
-
-int run_command(const struct futil_cmd_t *cmd, int argc, char *argv[])
-{
-	/* Handle the "CMD --help" case ourselves */
-	if (2 == argc && 0 == strcmp(argv[1], "--help")) {
-		char *fake_argv[] = {"help",
-				     (char *)cmd->name,
-				     NULL};
-		return do_help(2, fake_argv);
-	}
-
-	return cmd->handler(argc, argv);
-}
+		      ver_help);
 
 static char *simple_basename(char *str)
 {
@@ -295,15 +291,20 @@ static char *simple_basename(char *str)
 }
 
 /* Here we go */
+#define OPT_HELP 1000
+test_mockable
 int main(int argc, char *argv[], char *envp[])
 {
 	char *progname;
 	const struct futil_cmd_t *cmd;
 	int i, errorcnt = 0;
 	int vb_ver = VBOOT_VERSION_ALL;
+	int helpind = 0;
 	struct option long_opts[] = {
-		{"vb1" , 0,  &vb_ver,  VBOOT_VERSION_1_0},
-		{"vb21", 0,  &vb_ver,  VBOOT_VERSION_2_1},
+		{"debug", 0, &debugging_enabled, 1},
+		{"vb1" ,  0, &vb_ver, VBOOT_VERSION_1_0},
+		{"vb21",  0, &vb_ver, VBOOT_VERSION_2_1},
+		{"help",  0, 0, OPT_HELP},
 		{ 0, 0, 0, 0},
 	};
 
@@ -314,14 +315,20 @@ int main(int argc, char *argv[], char *envp[])
 
 	/* See if the program name is a command we recognize */
 	cmd = find_command(progname);
-	if (cmd)
+	if (cmd) {
 		/* Yep, just do that */
-		return run_command(cmd, argc, argv);
+		return !!run_command(cmd, argc, argv);
+	}
 
 	/* Parse the global options, stopping at the first non-option. */
 	opterr = 0;				/* quiet, you. */
 	while ((i = getopt_long(argc, argv, "+:", long_opts, NULL)) != -1) {
 		switch (i) {
+		case OPT_HELP:
+			/* Remember where we found this option */
+			/* Note: this might be GNU-specific */
+			helpind = optind - 1;
+			break;
 		case '?':
 			if (optopt)
 				fprintf(stderr, "Unrecognized option: -%c\n",
@@ -338,32 +345,43 @@ int main(int argc, char *argv[], char *envp[])
 		case 0:				/* handled option */
 			break;
 		default:
-			Debug("i=%d\n", i);
-			DIE;
+			FATAL("Unrecognized getopt output: %d\n", i);
 		}
 	}
 	vboot_version = vb_ver;
 
-	/* Reset the getopt state so commands can parse their own options. */
-	argc -= optind;
-	argv += optind;
-	optind = 0;
+	/*
+	 * Translate "--help" in the args to "help" as the first parameter,
+	 * by rearranging argv[].
+	 */
+	if (helpind) {
+		int j;
+		optind--;
+		for (j = helpind; j < optind; j++)
+			argv[j] = argv[j + 1];
+		argv[j] = (char *)"help";
+	}
 
 	/* We require a command name. */
-	if (errorcnt || argc < 1) {
-		do_help(0, 0);
+	if (errorcnt || argc == optind) {
+		do_help(1, argv);
 		return 1;
 	}
 
 	/* For reasons I've forgotten, treat /blah/blah/CMD the same as CMD */
-	progname = simple_basename(argv[0]);
+	argv[optind] = simple_basename(argv[optind]);
 
 	/* Do we recognize the command? */
-	cmd = find_command(progname);
-	if (cmd)
-		return run_command(cmd, argc, argv);
+	cmd = find_command(argv[optind]);
+	if (cmd) {
+		/* Reset so commands can parse their own options */
+		argc -= optind;
+		argv += optind;
+		optind = 0;
+		return !!run_command(cmd, argc, argv);
+	}
 
 	/* Nope. We've no clue what we're being asked to do. */
-	do_help(0, 0);
+	do_help(1, argv);
 	return 1;
 }

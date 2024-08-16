@@ -1,4 +1,4 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
@@ -6,7 +6,7 @@
 #ifndef VBOOT_REFERENCE_CGPTLIB_H_
 #define VBOOT_REFERENCE_CGPTLIB_H_
 
-#include "sysincludes.h"
+#include "2sysincludes.h"
 #include "gpt_misc.h"
 
 /**
