@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -8,56 +8,92 @@
 #ifndef VBOOT_REFERENCE_HOST_SIGNATURE_H_
 #define VBOOT_REFERENCE_HOST_SIGNATURE_H_
 
-#include "cryptolib.h"
 #include "host_key.h"
-#include "utility.h"
 #include "vboot_struct.h"
 
+struct vb2_private_key;
+struct vb2_signature;
 
-/* Initialize a signature struct. */
-void SignatureInit(VbSignature* sig, uint8_t* sig_data,
-                   uint64_t sig_size, uint64_t data_size);
-
-
-/* Allocate a new signature with space for a [sig_size] byte signature. */
-VbSignature* SignatureAlloc(uint64_t sig_size, uint64_t data_size);
-
-
-/* Copy a signature key from [src] to [dest].
+/**
+ * Initialize a signature struct.
  *
- * Returns 0 if success, non-zero if error. */
-int SignatureCopy(VbSignature* dest, const VbSignature* src);
+ * @param sig		Structure to initialize
+ * @param sig_data	Pointer to signature data buffer (after sig)
+ * @param sig_size	Size of signature data buffer in bytes
+ * @param data_size	Amount of data signed in bytes
+ */
+void vb2_init_signature(struct vb2_signature *sig, uint8_t *sig_data,
+			uint32_t sig_size, uint32_t data_size);
 
 
-/* Calculates a SHA-512 checksum.
- * Caller owns the returned pointer, and must free it with Free().
+/**
+ * Allocate a new signature.
  *
- * Returns NULL on error. */
-VbSignature* CalculateChecksum(const uint8_t* data, uint64_t size);
-
-
-/* Calculates a hash of the data using the algorithm from the specified key.
- * Caller owns the returned pointer, and must free it with Free().
+ * @param sig_size	Size of signature in bytes
+ * @param data_size	Amount of data signed in bytes
  *
- * Returns NULL on error. */
-VbSignature* CalculateHash(const uint8_t* data, uint64_t size,
-                           const VbPrivateKey* key);
+ * @return The signature or NULL if error.  Caller must free() it.
+ */
+struct vb2_signature *vb2_alloc_signature(uint32_t sig_size,
+					  uint32_t data_size);
 
-/* Calculates a signature for the data using the specified key.
- * Caller owns the returned pointer, and must free it with Free().
+/**
+ * Copy a signature.
  *
- * Returns NULL on error. */
-VbSignature* CalculateSignature(const uint8_t* data, uint64_t size,
-                                const VbPrivateKey* key);
+ * @param dest		Destination signature
+ * @param src		Source signature
+ *
+ * @return VB2_SUCCESS, or non-zero if error. */
+vb2_error_t vb2_copy_signature(struct vb2_signature *dest,
+			       const struct vb2_signature *src);
 
-/* Calculates a signature for the data using the specified key and
- * an external program.
- * Caller owns the returned pointer, and must free it with Free().
+/**
+ * Calculate a SHA-512 digest-only signature.
  *
- * Returns NULL on error. */
-VbSignature* CalculateSignature_external(const uint8_t* data, uint64_t size,
-                                         const char* key_file,
-                                         uint64_t key_algorithm,
-                                         const char* external_signer);
+ * @param data		Pointer to data to hash
+ * @param size		Length of data in bytes
+ *
+ * @return The signature, or NULL if error.  Caller must free() it.
+ */
+struct vb2_signature *vb2_sha512_signature(const uint8_t *data, uint32_t size);
+
+/**
+ * Calculate a signature for the data using the specified key.
+ *
+ * @param data		Pointer to data to sign
+ * @param size		Length of data in bytes
+ * @param key		Private key to use to sign data
+ *
+ * @return The signature, or NULL if error.  Caller must free() it.
+ */
+struct vb2_signature *vb2_calculate_signature(
+	const uint8_t *data, uint32_t size, const struct vb2_private_key *key);
+
+/**
+ * Calculate a signature for the data using an external signer.
+ *
+ * @param data			Pointer to data to sign
+ * @param size			Length of data in bytes
+ * @param key_file		Name of file containing private key
+ * @param key_algorithm		Key algorithm
+ * @param external_signer	Path to external signer program
+ *
+ * @return The signature, or NULL if error.  Caller must free() it.
+ */
+struct vb2_signature *vb2_external_signature(const uint8_t *data, uint32_t size,
+					     const char *key_file,
+					     uint32_t key_algorithm,
+					     const char *external_signer);
+
+/**
+ * Create signature using the provided hash as its body. Created signature
+ * contains vb2_hash trimmed to fit digest of its algorithm and nothing more.
+ *
+ * @param hash		Hash to create signature from
+ *
+ * @return The signature, or NULL if error. Caller must free() it.
+ */
+struct vb2_signature *
+vb2_create_signature_from_hash(const struct vb2_hash *hash);
 
 #endif  /* VBOOT_REFERENCE_HOST_SIGNATURE_H_ */
