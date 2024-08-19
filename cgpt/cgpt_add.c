@@ -1,67 +1,50 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
+#include <stdio.h>
 #include <string.h>
 
-#define _STUB_IMPLEMENTATION_
-
 #include "cgpt.h"
-#include "cgpt_params.h"
 #include "cgptlib_internal.h"
-#include "utility.h"
+#include "cgpt_params.h"
 #include "vboot_host.h"
 
-static const char* DumpCgptAddParams(const CgptAddParams *params) {
-  static char buf[256];
+static void PrintCgptAddParams(const CgptAddParams *params) {
   char tmp[64];
 
-  buf[0] = 0;
-  snprintf(tmp, sizeof(tmp), "-i %d ", params->partition);
-  StrnAppend(buf, tmp, sizeof(buf));
-  if (params->label) {
-    snprintf(tmp, sizeof(tmp), "-l %s ", params->label);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
-  if (params->set_begin) {
-    snprintf(tmp, sizeof(tmp), "-b %llu ", (unsigned long long)params->begin);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
-  if (params->set_size) {
-    snprintf(tmp, sizeof(tmp), "-s %llu ", (unsigned long long)params->size);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
+  fprintf(stderr, "-i %d ", params->partition);
+  if (params->label)
+    fprintf(stderr, "-l %s ", params->label);
+  if (params->set_begin)
+    fprintf(stderr, "-b %llu ", (unsigned long long)params->begin);
+  if (params->set_size)
+    fprintf(stderr, "-s %llu ", (unsigned long long)params->size);
   if (params->set_type) {
     GuidToStr(&params->type_guid, tmp, sizeof(tmp));
-    StrnAppend(buf, "-t ", sizeof(buf));
-    StrnAppend(buf, tmp, sizeof(buf));
-    StrnAppend(buf, " ", sizeof(buf));
+    fprintf(stderr, "-t %s ", tmp);
   }
   if (params->set_unique) {
     GuidToStr(&params->unique_guid, tmp, sizeof(tmp));
-    StrnAppend(buf, "-u ", sizeof(buf));
-    StrnAppend(buf, tmp, sizeof(buf));
-    StrnAppend(buf, " ", sizeof(buf));
+    fprintf(stderr, "-u %s ", tmp);
   }
-  if (params->set_successful) {
-    snprintf(tmp, sizeof(tmp), "-S %d ", params->successful);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
-  if (params->set_tries) {
-    snprintf(tmp, sizeof(tmp), "-T %d ", params->tries);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
-  if (params->set_priority) {
-    snprintf(tmp, sizeof(tmp), "-P %d ", params->priority);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
-  if (params->set_raw) {
-    snprintf(tmp, sizeof(tmp), "-A 0x%x ", params->raw_value);
-    StrnAppend(buf, tmp, sizeof(buf));
-  }
+  if (params->set_error_counter)
+    fprintf(stderr, "-E %d ", params->error_counter);
+  if (params->set_successful)
+    fprintf(stderr, "-S %d ", params->successful);
+  if (params->set_tries)
+    fprintf(stderr, "-T %d ", params->tries);
+  if (params->set_priority)
+    fprintf(stderr, "-P %d ", params->priority);
+  if (params->set_required)
+    fprintf(stderr, "-R %d ", params->required);
+  if (params->set_legacy_boot)
+    fprintf(stderr, "-B %d ", params->legacy_boot);
+  if (params->set_raw)
+    fprintf(stderr, "-A %#x ", params->raw_value);
 
-  StrnAppend(buf, "\n", sizeof(buf));
-  return buf;
+  fprintf(stderr, "\n");
 }
 
 // This is the implementation-specific helper function.
@@ -86,7 +69,7 @@ static int GptSetEntryAttributes(struct drive *drive,
   if (params->set_type)
     memcpy(&entry->type, &params->type_guid, sizeof(Guid));
   if (params->label) {
-    if (CGPT_OK != UTF8ToUTF16((uint8_t *)params->label, entry->name,
+    if (CGPT_OK != UTF8ToUTF16((const uint8_t *)params->label, entry->name,
                                sizeof(entry->name) / sizeof(entry->name[0]))) {
       Error("The label cannot be converted to UTF16.\n");
       return -1;
@@ -103,12 +86,18 @@ static int SetEntryAttributes(struct drive *drive,
   if (params->set_raw) {
     SetRaw(drive, PRIMARY, index, params->raw_value);
   } else {
+    if (params->set_error_counter)
+      SetErrorCounter(drive, PRIMARY, index, params->error_counter);
     if (params->set_successful)
       SetSuccessful(drive, PRIMARY, index, params->successful);
     if (params->set_tries)
       SetTries(drive, PRIMARY, index, params->tries);
     if (params->set_priority)
       SetPriority(drive, PRIMARY, index, params->priority);
+    if (params->set_legacy_boot)
+      SetLegacyBoot(drive, PRIMARY, index, params->legacy_boot);
+    if (params->set_required)
+      SetRequired(drive, PRIMARY, index, params->required);
   }
 
   // New partitions must specify type, begin, and size.
@@ -128,16 +117,14 @@ static int SetEntryAttributes(struct drive *drive,
 
 static int CgptCheckAddValidity(struct drive *drive) {
   int gpt_retval;
-  if (GPT_SUCCESS != (gpt_retval = GptSanityCheck(&drive->gpt))) {
-    Error("GptSanityCheck() returned %d: %s\n",
+  if (GPT_SUCCESS != (gpt_retval = GptValidityCheck(&drive->gpt))) {
+    Error("GptValidityCheck() returned %d: %s\n",
           gpt_retval, GptError(gpt_retval));
     return -1;
   }
 
-  if (((drive->gpt.valid_headers & MASK_BOTH) != MASK_BOTH) ||
-      ((drive->gpt.valid_entries & MASK_BOTH) != MASK_BOTH)) {
-    Error("one of the GPT header/entries is invalid.\n"
-          "please run 'cgpt repair' before adding anything.\n");
+  if (CGPT_OK != CheckValid(drive)) {
+    Error("please run 'cgpt repair' before adding anything.\n");
     return -1;
   }
 
@@ -213,7 +200,7 @@ int CgptGetPartitionDetails(CgptAddParams *params) {
   if (params == NULL)
     return CGPT_FAILED;
 
-  if (CGPT_OK != DriveOpen(params->drive_name, &drive, O_RDWR,
+  if (CGPT_OK != DriveOpen(params->drive_name, &drive, O_RDONLY,
                            params->drive_size))
     return CGPT_FAILED;
 
@@ -254,6 +241,7 @@ int CgptGetPartitionDetails(CgptAddParams *params) {
   memcpy(&params->unique_guid, &entry->unique, sizeof(Guid));
   params->raw_value = entry->attrs.fields.gpt_att;
 
+  params->error_counter = GetErrorCounter(&drive, PRIMARY, index);
   params->successful = GetSuccessful(&drive, PRIMARY, index);
   params->tries = GetTries(&drive, PRIMARY, index);
   params->priority = GetPriority(&drive, PRIMARY, index);
@@ -286,7 +274,8 @@ static int GptAdd(struct drive *drive, CgptAddParams *params, uint32_t index) {
     // If the modified entry is illegal, recover it and return error.
     memcpy(entry, &backup, sizeof(*entry));
     Error("%s\n", GptErrorText(rv));
-    Error(DumpCgptAddParams(params));
+    Error("");
+    PrintCgptAddParams(params);
     return -1;
   }
 

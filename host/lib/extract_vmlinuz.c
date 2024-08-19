@@ -1,4 +1,4 @@
-/* Copyright 2015 The Chromium OS Authors. All rights reserved.
+/* Copyright 2015 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -8,27 +8,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "2common.h"
+#include "2struct.h"
+#include "vboot_host.h"
 #include "vboot_struct.h"
-
 
 int ExtractVmlinuz(void *kpart_data, size_t kpart_size,
 		   void **vmlinuz_out, size_t *vmlinuz_size) {
-	uint64_t now = 0;
-	VbKeyBlockHeader *keyblock = NULL;
-	VbKernelPreambleHeader *preamble = NULL;
+	size_t now = 0;
+	struct vb2_kernel_preamble *preamble = NULL;
 	uint8_t *kblob_data = NULL;
-	uint64_t kblob_size = 0;
-	uint64_t vmlinuz_header_size = 0;
+	uint32_t kblob_size = 0;
+	uint32_t vmlinuz_header_size = 0;
 	uint64_t vmlinuz_header_address = 0;
 	uint64_t vmlinuz_header_offset = 0;
 	void *vmlinuz = NULL;
 
-	keyblock = (VbKeyBlockHeader *)kpart_data;
-	now += keyblock->key_block_size;
+	struct vb2_keyblock *keyblock = (struct vb2_keyblock *)kpart_data;
+	now += keyblock->keyblock_size;
 	if (now > kpart_size)
 		return 1;
 
-	preamble = (VbKernelPreambleHeader *)(kpart_data + now);
+	preamble = (struct vb2_kernel_preamble *)(kpart_data + now);
 	now += preamble->preamble_size;
 	if (now > kpart_size)
 		return 1;
@@ -45,7 +46,8 @@ int ExtractVmlinuz(void *kpart_data, size_t kpart_size,
 	}
 
 	if (!vmlinuz_header_size ||
-	     kpart_data + vmlinuz_header_offset + vmlinuz_header_size > kpart_data) {
+	    kpart_data + vmlinuz_header_offset + vmlinuz_header_size >
+	    kpart_data) {
 		return 1;
 	}
 
@@ -55,7 +57,7 @@ int ExtractVmlinuz(void *kpart_data, size_t kpart_size,
 	// the keyblock and preamble sections.
 	vmlinuz_header_offset = vmlinuz_header_address -
 		preamble->body_load_address +
-		keyblock->key_block_size +
+		keyblock->keyblock_size +
 		preamble->preamble_size;
 
 	vmlinuz = malloc(vmlinuz_header_size + kblob_size);
