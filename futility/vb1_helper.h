@@ -1,44 +1,67 @@
-/*
- * Copyright (c) 2014 The Chromium OS Authors. All rights reserved.
+/* Copyright 2014 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-#ifndef VBOOT_REFERENCE_FUTILITY_VB1_HELPER_H_
-#define VBOOT_REFERENCE_FUTILITY_VB1_HELPER_H_
+#ifndef VBOOT_REFERENCE_VB1_HELPER_H_
+#define VBOOT_REFERENCE_VB1_HELPER_H_
 
-uint8_t *ReadConfigFile(const char *config_file, uint64_t *config_size);
+struct vb2_kernel_preamble;
+struct vb2_keyblock;
+struct vb2_packed_key;
 
-uint8_t *CreateKernelBlob(uint8_t *vmlinuz_buf, uint64_t vmlinuz_size,
+/* Display a public key with variable indentation */
+void show_pubkey(const struct vb2_packed_key *pubkey, const char *sp);
+
+/* Other random functions needed for backward compatibility */
+
+uint8_t *ReadConfigFile(const char *config_file, uint32_t *config_size);
+
+uint8_t *CreateKernelBlob(uint8_t *vmlinuz_buf, uint32_t vmlinuz_size,
 			  enum arch_t arch, uint64_t kernel_body_load_address,
-			  uint8_t *config_data, uint64_t config_size,
-			  uint8_t *bootloader_data, uint64_t bootloader_size,
-			  uint64_t *blob_size_ptr);
+			  uint8_t *config_data, uint32_t config_size,
+			  uint8_t *bootloader_data, uint32_t bootloader_size,
+			  uint32_t *blob_size_ptr);
 
-uint8_t *SignKernelBlob(uint8_t *kernel_blob, uint64_t kernel_size,
-			uint64_t padding,
-			int version, uint64_t kernel_body_load_address,
-			VbKeyBlockHeader *keyblock, VbPrivateKey *signpriv_key,
-			uint32_t flags, uint64_t *vblock_size_ptr);
+uint8_t *SignKernelBlob(uint8_t *kernel_blob,
+			uint32_t kernel_size,
+			uint32_t padding,
+			int version,
+			uint64_t kernel_body_load_address,
+			struct vb2_keyblock *keyblock,
+			struct vb2_private_key *signpriv_key,
+			uint32_t flags,
+			uint32_t *vblock_size_ptr);
 
 int WriteSomeParts(const char *outfile,
-		   void *part1_data, uint64_t part1_size,
-		   void *part2_data, uint64_t part2_size);
+		   void *part1_data, uint32_t part1_size,
+		   void *part2_data, uint32_t part2_size);
 
-uint8_t *UnpackKPart(uint8_t *kpart_data, uint64_t kpart_size,
-		     uint64_t padding,
-		     VbKeyBlockHeader **keyblock_ptr,
-		     VbKernelPreambleHeader **preamble_ptr,
-		     uint64_t *blob_size_ptr);
+/**
+ * Unpack a kernel partition.
+ *
+ * @param kpart_data	Kernel partition data
+ * @param kpart_size	Size of kernel partition data in bytes
+ * @param keyblock_ptr	Pointer to keyblock stored here on exit
+ * @param preamble_ptr	Pointer to premable stored here on exit
+ * @param blob_size_ptr	Size of kernel data blob stored here on exit
+ *
+ * @return A pointer to the kernel data blob, or NULL if error.
+ */
+uint8_t *unpack_kernel_partition(uint8_t *kpart_data,
+				 uint32_t kpart_size,
+				 struct vb2_keyblock **keyblock_ptr,
+				 struct vb2_kernel_preamble **preamble_ptr,
+				 uint32_t *blob_size_ptr);
 
-int UpdateKernelBlobConfig(uint8_t *kblob_data, uint64_t kblob_size,
-			   uint8_t *config_data, uint64_t config_size);
+int UpdateKernelBlobConfig(uint8_t *kblob_data, uint32_t kblob_size,
+			   uint8_t *config_data, uint32_t config_size);
 
 int VerifyKernelBlob(uint8_t *kernel_blob,
-		     uint64_t kernel_size,
-		     VbPublicKey *signpub_key,
+		     uint32_t kernel_size,
+		     struct vb2_packed_key *signpub_key,
 		     const char *keyblock_outfile,
-		     uint64_t min_version);
+		     uint32_t min_version);
 
-uint64_t KernelCmdLineOffset(VbKernelPreambleHeader *preamble);
+uint64_t kernel_cmd_line_offset(const struct vb2_kernel_preamble *preamble);
 
-#endif	/* VBOOT_REFERENCE_FUTILITY_VB1_HELPER_H_ */
+#endif  /* VBOOT_REFERENCE_VB1_HELPER_H_ */

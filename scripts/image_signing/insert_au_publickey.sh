@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2011 The Chromium OS Authors. All rights reserved.
+# Copyright 2011 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -21,9 +21,17 @@ Installs the update verification public key <au_public_key.pem> to <image.bin>.
 EOF
     exit 1
   fi
-  local rootfs=$(make_temp_dir)
+
+  local loopdev rootfs
+  if [[ -d "${image}" ]]; then
+    rootfs="${image}"
+  else
+    rootfs=$(make_temp_dir)
+    loopdev=$(loopback_partscan "${image}")
+    mount_loop_image_partition "${loopdev}" 3 "${rootfs}"
+  fi
+
   local key_location="/usr/share/update_engine/"
-  mount_image_partition "$image" 3 "$rootfs"
   sudo mkdir -p "$rootfs/$key_location"
   sudo cp "$pub_key" "$rootfs/$key_location/update-payload-key.pub.pem"
   sudo chown root:root "$rootfs/$key_location/update-payload-key.pub.pem"

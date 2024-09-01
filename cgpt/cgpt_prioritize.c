@@ -1,6 +1,7 @@
-// Copyright (c) 2012 The Chromium OS Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+/* Copyright 2012 The ChromiumOS Authors
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
 
 #include <string.h>
 
@@ -110,10 +111,16 @@ int CgptPrioritize(CgptPrioritizeParams *params) {
                            params->drive_size))
     return CGPT_FAILED;
 
-  if (GPT_SUCCESS != (gpt_retval = GptSanityCheck(&drive.gpt))) {
-    Error("GptSanityCheck() returned %d: %s\n",
+  if (GPT_SUCCESS != (gpt_retval = GptValidityCheck(&drive.gpt))) {
+    Error("GptValidityCheck() returned %d: %s\n",
           gpt_retval, GptError(gpt_retval));
-    return CGPT_FAILED;
+    goto bad;
+  }
+
+  if (CGPT_OK != CheckValid(&drive)) {
+    Error("please run 'cgpt repair' before reordering the priority.\n");
+    (void) DriveClose(&drive, 0);
+    return CGPT_OK;
   }
 
   max_part = GetNumberOfEntries(&drive);
