@@ -1,4 +1,17 @@
+name: "vboot_reference"
+description:
+    "Google's Verified Boot reference implementation (versions 1.x & 2.x) and "
+    "helper tools"
+
 third_party {
+  identifier {
+    type: "Git"
+    value: "https://chromium.googlesource.com/chromiumos/platform/vboot_reference"
+    primary_source: true
+    version: "4b12d392e5b12de29c582df4e717b1228e9f1594"
+  }
+  version: "4b12d392e5b12de29c582df4e717b1228e9f1594"
+  last_upgrade_date { year: 2024 month: 7 day: 22 }
   license_note: "would be NOTICE save for scripts/image_signing/lib/shflags/shflags"
   license_type: RESTRICTED
 }

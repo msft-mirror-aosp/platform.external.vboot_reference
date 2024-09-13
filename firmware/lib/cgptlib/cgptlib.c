@@ -1,15 +1,14 @@
-/* Copyright (c) 2013 The Chromium OS Authors. All rights reserved.
+/* Copyright 2013 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
 
-#include "sysincludes.h"
-
+#include "2common.h"
+#include "2sysincludes.h"
 #include "cgptlib.h"
 #include "cgptlib_internal.h"
 #include "crc32.h"
 #include "gpt.h"
-#include "utility.h"
 #include "vboot_api.h"
 
 int GptInit(GptData *gpt)
@@ -20,9 +19,9 @@ int GptInit(GptData *gpt)
 	gpt->current_kernel = CGPT_KERNEL_ENTRY_NOT_FOUND;
 	gpt->current_priority = 999;
 
-	retval = GptSanityCheck(gpt);
+	retval = GptValidityCheck(gpt);
 	if (GPT_SUCCESS != retval) {
-		VBDEBUG(("GptInit() failed sanity check\n"));
+		VB2_DEBUG("GptInit() failed validity check\n");
 		return retval;
 	}
 
@@ -50,18 +49,18 @@ int GptNextKernelEntry(GptData *gpt, uint64_t *start_sector, uint64_t *size)
 			e = entries + i;
 			if (!IsKernelEntry(e))
 				continue;
-			VBDEBUG(("GptNextKernelEntry looking at same prio "
-				 "partition %d\n", i+1));
-			VBDEBUG(("GptNextKernelEntry s%d t%d p%d\n",
-				 GetEntrySuccessful(e), GetEntryTries(e),
-				 GetEntryPriority(e)));
+			VB2_DEBUG("GptNextKernelEntry looking at same prio "
+				  "partition %d\n", i+1);
+			VB2_DEBUG("GptNextKernelEntry s%d t%d p%d\n",
+				  GetEntrySuccessful(e), GetEntryTries(e),
+				  GetEntryPriority(e));
 			if (!(GetEntrySuccessful(e) || GetEntryTries(e)))
 				continue;
 			if (GetEntryPriority(e) == gpt->current_priority) {
 				gpt->current_kernel = i;
 				*start_sector = e->starting_lba;
 				*size = e->ending_lba - e->starting_lba + 1;
-				VBDEBUG(("GptNextKernelEntry likes it\n"));
+				VB2_DEBUG("GptNextKernelEntry likes it\n");
 				return GPT_SUCCESS;
 			}
 		}
@@ -75,11 +74,11 @@ int GptNextKernelEntry(GptData *gpt, uint64_t *start_sector, uint64_t *size)
 		int current_prio = GetEntryPriority(e);
 		if (!IsKernelEntry(e))
 			continue;
-		VBDEBUG(("GptNextKernelEntry looking at new prio "
-			 "partition %d\n", i+1));
-		VBDEBUG(("GptNextKernelEntry s%d t%d p%d\n",
-			 GetEntrySuccessful(e), GetEntryTries(e),
-			 GetEntryPriority(e)));
+		VB2_DEBUG("GptNextKernelEntry looking at new prio "
+			  "partition %d\n", i+1);
+		VB2_DEBUG("GptNextKernelEntry s%d t%d p%d\n",
+			  GetEntrySuccessful(e), GetEntryTries(e),
+			  GetEntryPriority(e));
 		if (!(GetEntrySuccessful(e) || GetEntryTries(e)))
 			continue;
 		if (current_prio >= gpt->current_priority) {
@@ -101,11 +100,11 @@ int GptNextKernelEntry(GptData *gpt, uint64_t *start_sector, uint64_t *size)
 	gpt->current_priority = new_prio;
 
 	if (CGPT_KERNEL_ENTRY_NOT_FOUND == new_kernel) {
-		VBDEBUG(("GptNextKernelEntry no more kernels\n"));
+		VB2_DEBUG("GptNextKernelEntry no more kernels\n");
 		return GPT_ERROR_NO_VALID_KERNEL;
 	}
 
-	VBDEBUG(("GptNextKernelEntry likes partition %d\n", new_kernel + 1));
+	VB2_DEBUG("GptNextKernelEntry likes partition %d\n", new_kernel + 1);
 	e = entries + new_kernel;
 	*start_sector = e->starting_lba;
 	*size = e->ending_lba - e->starting_lba + 1;
@@ -143,6 +142,7 @@ int GptUpdateKernelWithEntry(GptData *gpt, GptEntry *e, uint32_t update_type)
 			break;
 		}
 		/* Out of tries, so drop through and mark partition bad. */
+		VBOOT_FALLTHROUGH;
 	}
 	case GPT_UPDATE_ENTRY_BAD: {
 		/* Giving up on this partition entirely. */
@@ -157,21 +157,21 @@ int GptUpdateKernelWithEntry(GptData *gpt, GptEntry *e, uint32_t update_type)
 		}
 		break;
 	}
-	case GPT_UPDATE_ENTRY_RESET: {
+	case GPT_UPDATE_ENTRY_ACTIVE: {
 		/*
-		 * Used for fastboot mode. If image is written to kernel
-		 * partition, its GPT entry is marked with S1,P1,T15
+		 * Used for fastboot mode. If kernel partition slot is marked
+		 * active, its GPT entry is marked with S1,P2,T0.
 		 */
 		modified = 1;
-		SetEntryTries(e, 15);
-		SetEntryPriority(e, 1);
+		SetEntryTries(e, 0);
+		SetEntryPriority(e, 2);
 		SetEntrySuccessful(e, 1);
 		break;
 	}
 	case GPT_UPDATE_ENTRY_INVALID: {
 		/*
-		 * Used for fastboot mode. If kernel partition is erased, its
-		 * GPT entry is marked with S0,P0,T0
+		 * Used for fastboot mode. If kernel partition slot is marked
+		 * invalid, its GPT entry is marked with S0,P0,T0
 		 */
 		modified = 1;
 		SetEntryTries(e, 0);
@@ -220,7 +220,7 @@ GptEntry *GptFindNthEntry(GptData *gpt, const Guid *guid, unsigned int n)
 	int i;
 
 	for (i = 0, e = entries; i < header->number_of_entries; i++, e++) {
-		if (!Memcmp(&e->type, guid, sizeof(*guid))) {
+		if (!memcmp(&e->type, guid, sizeof(*guid))) {
 			if (n == 0)
 				return e;
 			n--;

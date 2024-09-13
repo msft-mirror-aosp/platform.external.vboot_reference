@@ -1,4 +1,4 @@
-/* Copyright (c) 2010 The Chromium OS Authors. All rights reserved.
+/* Copyright 2010 The ChromiumOS Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  *
@@ -9,7 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
-#ifndef HAVE_MACOS
+#if !defined(HAVE_MACOS) && !defined(__FreeBSD__) && !defined(__OpenBSD__)
 #include <linux/major.h>
 #include <mtd/mtd-user.h>
 #endif
@@ -51,6 +51,22 @@ void Warning(const char *format, ...) {
   va_end(ap);
 }
 
+int check_int_parse(char option, const char *buf) {
+  if (!*optarg || (buf && *buf)) {
+    Error("invalid argument to -%c: \"%s\"\n", option, optarg);
+    return 1;
+  }
+  return 0;
+}
+
+int check_int_limit(char option, int val, int low, int high) {
+  if (val < low || val > high) {
+    Error("value for -%c must be between %d and %d", option, low, high);
+    return 1;
+  }
+  return 0;
+}
+
 int CheckValid(const struct drive *drive) {
   if ((drive->gpt.valid_headers != MASK_BOTH) ||
       (drive->gpt.valid_entries != MASK_BOTH)) {
@@ -60,7 +76,7 @@ int CheckValid(const struct drive *drive) {
   return CGPT_OK;
 }
 
-int Load(struct drive *drive, uint8_t **buf,
+int Load(struct drive *drive, uint8_t *buf,
                 const uint64_t sector,
                 const uint64_t sector_bytes,
                 const uint64_t sector_count) {
@@ -69,37 +85,30 @@ int Load(struct drive *drive, uint8_t **buf,
 
   require(buf);
   if (!sector_count || !sector_bytes) {
-    Error("%s() failed at line %d: sector_count=%ld, sector_bytes=%ld\n",
+    Error("%s() failed at line %d: sector_count=%" PRIu64 ", sector_bytes=%" PRIu64 "\n",
           __FUNCTION__, __LINE__, sector_count, sector_bytes);
     return CGPT_FAILED;
   }
   /* Make sure that sector_bytes * sector_count doesn't roll over. */
   if (sector_bytes > (UINT64_MAX / sector_count)) {
-    Error("%s() failed at line %d: sector_count=%d, sector_bytes=%d\n",
+    Error("%s() failed at line %d: sector_count=%" PRIu64 ", sector_bytes=%" PRIu64 "\n",
           __FUNCTION__, __LINE__, sector_count, sector_bytes);
     return CGPT_FAILED;
   }
   count = sector_bytes * sector_count;
-  *buf = malloc(count);
-  require(*buf);
 
   if (-1 == lseek(drive->fd, sector * sector_bytes, SEEK_SET)) {
     Error("Can't seek: %s\n", strerror(errno));
-    goto error_free;
+    return CGPT_FAILED;
   }
 
-  nread = read(drive->fd, *buf, count);
+  nread = read(drive->fd, buf, count);
   if (nread < count) {
     Error("Can't read enough: %d, not %d\n", nread, count);
-    goto error_free;
+    return CGPT_FAILED;
   }
 
   return CGPT_OK;
-
-error_free:
-  free(*buf);
-  *buf = 0;
-  return CGPT_FAILED;
 }
 
 
@@ -154,19 +163,27 @@ static int GptLoad(struct drive *drive, uint32_t sector_bytes) {
   }
   drive->gpt.streaming_drive_sectors = drive->size / drive->gpt.sector_bytes;
 
+  drive->gpt.primary_header = malloc(drive->gpt.sector_bytes);
+  drive->gpt.secondary_header = malloc(drive->gpt.sector_bytes);
+  drive->gpt.primary_entries = malloc(GPT_ENTRIES_ALLOC_SIZE);
+  drive->gpt.secondary_entries = malloc(GPT_ENTRIES_ALLOC_SIZE);
+  if (!drive->gpt.primary_header || !drive->gpt.secondary_header ||
+      !drive->gpt.primary_entries || !drive->gpt.secondary_entries)
+    return -1;
+
   /* TODO(namnguyen): Remove this and totally trust gpt_drive_sectors. */
   if (!(drive->gpt.flags & GPT_FLAG_EXTERNAL)) {
     drive->gpt.gpt_drive_sectors = drive->gpt.streaming_drive_sectors;
   } /* Else, we trust gpt.gpt_drive_sectors. */
 
   // Read the data.
-  if (CGPT_OK != Load(drive, &drive->gpt.primary_header,
+  if (CGPT_OK != Load(drive, drive->gpt.primary_header,
                       GPT_PMBR_SECTORS,
                       drive->gpt.sector_bytes, GPT_HEADER_SECTORS)) {
     Error("Cannot read primary GPT header\n");
     return -1;
   }
-  if (CGPT_OK != Load(drive, &drive->gpt.secondary_header,
+  if (CGPT_OK != Load(drive, drive->gpt.secondary_header,
                       drive->gpt.gpt_drive_sectors - GPT_PMBR_SECTORS,
                       drive->gpt.sector_bytes, GPT_HEADER_SECTORS)) {
     Error("Cannot read secondary GPT header\n");
@@ -175,86 +192,97 @@ static int GptLoad(struct drive *drive, uint32_t sector_bytes) {
   GptHeader* primary_header = (GptHeader*)drive->gpt.primary_header;
   if (CheckHeader(primary_header, 0, drive->gpt.streaming_drive_sectors,
                   drive->gpt.gpt_drive_sectors,
-                  drive->gpt.flags) == 0) {
-    if (CGPT_OK != Load(drive, &drive->gpt.primary_entries,
+                  drive->gpt.flags,
+                  drive->gpt.sector_bytes) == 0) {
+    if (CGPT_OK != Load(drive, drive->gpt.primary_entries,
                         primary_header->entries_lba,
                         drive->gpt.sector_bytes,
-                        CalculateEntriesSectors(primary_header))) {
+                        CalculateEntriesSectors(primary_header,
+                          drive->gpt.sector_bytes))) {
       Error("Cannot read primary partition entry array\n");
       return -1;
     }
   } else {
-    Warning("Primary GPT header is invalid\n");
+    Warning("Primary GPT header is %s\n",
+      memcmp(primary_header->signature, GPT_HEADER_SIGNATURE_IGNORED,
+             GPT_HEADER_SIGNATURE_SIZE) ? "invalid" : "being ignored");
   }
   GptHeader* secondary_header = (GptHeader*)drive->gpt.secondary_header;
   if (CheckHeader(secondary_header, 1, drive->gpt.streaming_drive_sectors,
                   drive->gpt.gpt_drive_sectors,
-                  drive->gpt.flags) == 0) {
-    if (CGPT_OK != Load(drive, &drive->gpt.secondary_entries,
+                  drive->gpt.flags,
+                  drive->gpt.sector_bytes) == 0) {
+    if (CGPT_OK != Load(drive, drive->gpt.secondary_entries,
                         secondary_header->entries_lba,
                         drive->gpt.sector_bytes,
-                        CalculateEntriesSectors(secondary_header))) {
+                        CalculateEntriesSectors(secondary_header,
+                          drive->gpt.sector_bytes))) {
       Error("Cannot read secondary partition entry array\n");
       return -1;
     }
   } else {
-    Warning("Secondary GPT header is invalid\n");
+    Warning("Secondary GPT header is %s\n",
+      memcmp(primary_header->signature, GPT_HEADER_SIGNATURE_IGNORED,
+             GPT_HEADER_SIGNATURE_SIZE) ? "invalid" : "being ignored");
   }
   return 0;
 }
 
 static int GptSave(struct drive *drive) {
   int errors = 0;
-  if (drive->gpt.modified & GPT_MODIFIED_HEADER1) {
-    if (CGPT_OK != Save(drive, drive->gpt.primary_header,
-                        GPT_PMBR_SECTORS,
-                        drive->gpt.sector_bytes, GPT_HEADER_SECTORS)) {
-      errors++;
-      Error("Cannot write primary header: %s\n", strerror(errno));
+
+  if (!(drive->gpt.ignored & MASK_PRIMARY)) {
+    if (drive->gpt.modified & GPT_MODIFIED_HEADER1) {
+      if (CGPT_OK != Save(drive, drive->gpt.primary_header,
+                          GPT_PMBR_SECTORS,
+                          drive->gpt.sector_bytes, GPT_HEADER_SECTORS)) {
+        errors++;
+        Error("Cannot write primary header: %s\n", strerror(errno));
+      }
+    }
+    GptHeader* primary_header = (GptHeader*)drive->gpt.primary_header;
+    if (drive->gpt.modified & GPT_MODIFIED_ENTRIES1) {
+      if (CGPT_OK != Save(drive, drive->gpt.primary_entries,
+                          primary_header->entries_lba,
+                          drive->gpt.sector_bytes,
+                          CalculateEntriesSectors(primary_header,
+                            drive->gpt.sector_bytes))) {
+        errors++;
+        Error("Cannot write primary entries: %s\n", strerror(errno));
+      }
+    }
+
+    // Sync primary GPT before touching secondary so one is always valid.
+    if (drive->gpt.modified & (GPT_MODIFIED_HEADER1 | GPT_MODIFIED_ENTRIES1))
+      if (fsync(drive->fd) < 0 && errno == EIO) {
+        errors++;
+        Error("I/O error when trying to write primary GPT\n");
+      }
+  }
+
+  // Only start writing secondary GPT if primary was written correctly.
+  if (!errors && !(drive->gpt.ignored & MASK_SECONDARY)) {
+    if (drive->gpt.modified & GPT_MODIFIED_HEADER2) {
+      if (CGPT_OK != Save(drive, drive->gpt.secondary_header,
+                         drive->gpt.gpt_drive_sectors - GPT_PMBR_SECTORS,
+                         drive->gpt.sector_bytes, GPT_HEADER_SECTORS)) {
+        errors++;
+        Error("Cannot write secondary header: %s\n", strerror(errno));
+      }
+    }
+    GptHeader* secondary_header = (GptHeader*)drive->gpt.secondary_header;
+    if (drive->gpt.modified & GPT_MODIFIED_ENTRIES2) {
+      if (CGPT_OK != Save(drive, drive->gpt.secondary_entries,
+                          secondary_header->entries_lba,
+                          drive->gpt.sector_bytes,
+                          CalculateEntriesSectors(secondary_header,
+                            drive->gpt.sector_bytes))) {
+        errors++;
+        Error("Cannot write secondary entries: %s\n", strerror(errno));
+      }
     }
   }
 
-  if (drive->gpt.modified & GPT_MODIFIED_HEADER2) {
-    if(CGPT_OK != Save(drive, drive->gpt.secondary_header,
-                       drive->gpt.gpt_drive_sectors - GPT_PMBR_SECTORS,
-                       drive->gpt.sector_bytes, GPT_HEADER_SECTORS)) {
-      errors++;
-      Error("Cannot write secondary header: %s\n", strerror(errno));
-    }
-  }
-  GptHeader* primary_header = (GptHeader*)drive->gpt.primary_header;
-  if (drive->gpt.modified & GPT_MODIFIED_ENTRIES1) {
-    if (CGPT_OK != Save(drive, drive->gpt.primary_entries,
-                        primary_header->entries_lba,
-                        drive->gpt.sector_bytes,
-                        CalculateEntriesSectors(primary_header))) {
-      errors++;
-      Error("Cannot write primary entries: %s\n", strerror(errno));
-    }
-  }
-  GptHeader* secondary_header = (GptHeader*)drive->gpt.secondary_header;
-  if (drive->gpt.modified & GPT_MODIFIED_ENTRIES2) {
-    if (CGPT_OK != Save(drive, drive->gpt.secondary_entries,
-                        secondary_header->entries_lba,
-                        drive->gpt.sector_bytes,
-                        CalculateEntriesSectors(secondary_header))) {
-      errors++;
-      Error("Cannot write secondary entries: %s\n", strerror(errno));
-    }
-  }
-
-  if (drive->gpt.primary_header)
-    free(drive->gpt.primary_header);
-  drive->gpt.primary_header = 0;
-  if (drive->gpt.primary_entries)
-    free(drive->gpt.primary_entries);
-  drive->gpt.primary_entries = 0;
-  if (drive->gpt.secondary_header)
-    free(drive->gpt.secondary_header);
-  drive->gpt.secondary_header = 0;
-  if (drive->gpt.secondary_entries)
-    free(drive->gpt.secondary_entries);
-  drive->gpt.secondary_entries = 0;
   return errors ? -1 : 0;
 }
 
@@ -267,7 +295,7 @@ static int ObtainDriveSize(int fd, uint64_t* size, uint32_t* sector_bytes) {
   if (fstat(fd, &stat) == -1) {
     return -1;
   }
-#ifndef HAVE_MACOS
+#if !defined(HAVE_MACOS) && !defined(__FreeBSD__) && !defined(__OpenBSD__)
   if ((stat.st_mode & S_IFMT) != S_IFREG) {
     if (ioctl(fd, BLKGETSIZE64, size) < 0) {
       return -1;
@@ -296,8 +324,8 @@ int DriveOpen(const char *drive_path, struct drive *drive, int mode,
   // Clear struct for proper error handling.
   memset(drive, 0, sizeof(struct drive));
 
-  drive->fd = open(drive_path, mode | 
-#ifndef HAVE_MACOS
+  drive->fd = open(drive_path, mode |
+#if !defined(HAVE_MACOS) && !defined(__FreeBSD__) && !defined(__OpenBSD__)
 		               O_LARGEFILE |
 #endif
 			       O_NOFOLLOW);
@@ -306,7 +334,6 @@ int DriveOpen(const char *drive_path, struct drive *drive, int mode,
     return CGPT_FAILED;
   }
 
-  sector_bytes = 512;
   uint64_t gpt_drive_size;
   if (ObtainDriveSize(drive->fd, &gpt_drive_size, &sector_bytes) != 0) {
     Error("Can't get drive size and bytes per sector for %s: %s\n",
@@ -345,6 +372,15 @@ int DriveClose(struct drive *drive, int update_as_needed) {
         errors++;
     }
   }
+
+  free(drive->gpt.primary_header);
+  drive->gpt.primary_header = NULL;
+  free(drive->gpt.primary_entries);
+  drive->gpt.primary_entries = NULL;
+  free(drive->gpt.secondary_header);
+  drive->gpt.secondary_header = NULL;
+  free(drive->gpt.secondary_entries);
+  drive->gpt.secondary_entries = NULL;
 
   // Sync early! Only sync file descriptor here, and leave the whole system sync
   // outside cgpt because whole system sync would trigger tons of disk accesses
@@ -631,23 +667,29 @@ int UTF8ToUTF16(const uint8_t *utf8, uint16_t *utf16, unsigned int maxoutput)
 const Guid guid_chromeos_firmware = GPT_ENT_TYPE_CHROMEOS_FIRMWARE;
 const Guid guid_chromeos_kernel =   GPT_ENT_TYPE_CHROMEOS_KERNEL;
 const Guid guid_chromeos_rootfs =   GPT_ENT_TYPE_CHROMEOS_ROOTFS;
-const Guid guid_linux_data =        GPT_ENT_TYPE_LINUX_DATA;
+const Guid guid_basic_data =        GPT_ENT_TYPE_BASIC_DATA;
+const Guid guid_linux_data =        GPT_ENT_TYPE_LINUX_FS;
 const Guid guid_chromeos_reserved = GPT_ENT_TYPE_CHROMEOS_RESERVED;
 const Guid guid_efi =               GPT_ENT_TYPE_EFI;
 const Guid guid_unused =            GPT_ENT_TYPE_UNUSED;
+const Guid guid_chromeos_minios =   GPT_ENT_TYPE_CHROMEOS_MINIOS;
+const Guid guid_chromeos_hibernate = GPT_ENT_TYPE_CHROMEOS_HIBERNATE;
 
-const static struct {
+static const struct {
   const Guid *type;
-  char *name;
-  char *description;
+  const char *name;
+  const char *description;
 } supported_types[] = {
   {&guid_chromeos_firmware, "firmware", "ChromeOS firmware"},
   {&guid_chromeos_kernel, "kernel", "ChromeOS kernel"},
   {&guid_chromeos_rootfs, "rootfs", "ChromeOS rootfs"},
   {&guid_linux_data, "data", "Linux data"},
+  {&guid_basic_data, "basicdata", "Basic data"},
   {&guid_chromeos_reserved, "reserved", "ChromeOS reserved"},
   {&guid_efi, "efi", "EFI System Partition"},
   {&guid_unused, "unused", "Unused (nonexistent) partition"},
+  {&guid_chromeos_minios, "minios", "ChromeOS miniOS"},
+  {&guid_chromeos_hibernate, "hibernate", "ChromeOS hibernate"},
 };
 
 /* Resolves human-readable GPT type.
@@ -726,6 +768,34 @@ GptEntry *GetEntry(GptData *gpt, int secondary, uint32_t entry_index) {
   return (GptEntry*)(&entries[stride * entry_index]);
 }
 
+void SetRequired(struct drive *drive, int secondary, uint32_t entry_index,
+                 int required) {
+  require(required >= 0 && required <= CGPT_ATTRIBUTE_MAX_REQUIRED);
+  GptEntry *entry;
+  entry = GetEntry(&drive->gpt, secondary, entry_index);
+  SetEntryRequired(entry, required);
+}
+
+int GetRequired(struct drive *drive, int secondary, uint32_t entry_index) {
+  GptEntry *entry;
+  entry = GetEntry(&drive->gpt, secondary, entry_index);
+  return GetEntryRequired(entry);
+}
+
+void SetLegacyBoot(struct drive *drive, int secondary, uint32_t entry_index,
+                   int legacy_boot) {
+  require(legacy_boot >= 0 && legacy_boot <= CGPT_ATTRIBUTE_MAX_LEGACY_BOOT);
+  GptEntry *entry;
+  entry = GetEntry(&drive->gpt, secondary, entry_index);
+  SetEntryLegacyBoot(entry, legacy_boot);
+}
+
+int GetLegacyBoot(struct drive *drive, int secondary, uint32_t entry_index) {
+  GptEntry *entry;
+  entry = GetEntry(&drive->gpt, secondary, entry_index);
+  return GetEntryLegacyBoot(entry);
+}
+
 void SetPriority(struct drive *drive, int secondary, uint32_t entry_index,
                  int priority) {
   require(priority >= 0 && priority <= CGPT_ATTRIBUTE_MAX_PRIORITY);
@@ -766,6 +836,21 @@ int GetSuccessful(struct drive *drive, int secondary, uint32_t entry_index) {
   GptEntry *entry;
   entry = GetEntry(&drive->gpt, secondary, entry_index);
   return GetEntrySuccessful(entry);
+}
+
+void SetErrorCounter(struct drive *drive, int secondary, uint32_t entry_index,
+                     int error_counter) {
+  require(error_counter >= 0 &&
+          error_counter <= CGPT_ATTRIBUTE_MAX_ERROR_COUNTER);
+  GptEntry *entry;
+  entry = GetEntry(&drive->gpt, secondary, entry_index);
+  SetEntryErrorCounter(entry, error_counter);
+}
+
+int GetErrorCounter(struct drive *drive, int secondary, uint32_t entry_index) {
+  GptEntry *entry;
+  entry = GetEntry(&drive->gpt, secondary, entry_index);
+  return GetEntryErrorCounter(entry);
 }
 
 void SetRaw(struct drive *drive, int secondary, uint32_t entry_index,
@@ -914,7 +999,7 @@ uint8_t RepairEntries(GptData *gpt, const uint32_t valid_entries) {
 
 /* The above five fields are shared between primary and secondary headers.
  * We can recover one header from another through copying those fields. */
-void CopySynonymousParts(GptHeader* target, const GptHeader* source) {
+static void CopySynonymousParts(GptHeader* target, const GptHeader* source) {
   target->first_usable_lba = source->first_usable_lba;
   target->last_usable_lba = source->last_usable_lba;
   target->number_of_entries = source->number_of_entries;
@@ -950,7 +1035,7 @@ uint8_t RepairHeader(GptData *gpt, const uint32_t valid_headers) {
     secondary_header->my_lba = gpt->gpt_drive_sectors - 1;  /* the last sector */
     secondary_header->alternate_lba = primary_header->my_lba;
     secondary_header->entries_lba = secondary_header->my_lba -
-        CalculateEntriesSectors(primary_header);
+        CalculateEntriesSectors(primary_header, gpt->sector_bytes);
     return GPT_MODIFIED_HEADER2;
   } else if (valid_headers == MASK_SECONDARY) {
     memcpy(primary_header, secondary_header, sizeof(GptHeader));
@@ -976,8 +1061,8 @@ int CgptGetNumNonEmptyPartitions(CgptShowParams *params) {
                            params->drive_size))
     return CGPT_FAILED;
 
-  if (GPT_SUCCESS != (gpt_retval = GptSanityCheck(&drive.gpt))) {
-    Error("GptSanityCheck() returned %d: %s\n",
+  if (GPT_SUCCESS != (gpt_retval = GptValidityCheck(&drive.gpt))) {
+    Error("GptValidityCheck() returned %d: %s\n",
           gpt_retval, GptError(gpt_retval));
     retval = CGPT_FAILED;
     goto done;
@@ -986,7 +1071,7 @@ int CgptGetNumNonEmptyPartitions(CgptShowParams *params) {
   params->num_partitions = 0;
   int numEntries = GetNumberOfEntries(&drive);
   int i;
-  for(i = 0; i < numEntries; i++) {
+  for (i = 0; i < numEntries; i++) {
       GptEntry *entry = GetEntry(&drive.gpt, ANY_VALID, i);
       if (GuidIsZero(&entry->type))
         continue;
@@ -1019,8 +1104,15 @@ void PMBRToStr(struct pmbr *pmbr, char *str, unsigned int buflen) {
   }
 }
 
-/* Optional */
-int __GenerateGuid(Guid *newguid) { return CGPT_FAILED; };
+/*
+ * This is here because some CGPT functionality is provided in libvboot_host.a
+ * for other host utilities. GenerateGuid() is implemented (in cgpt.c which is
+ * *not* linked into libvboot_host.a) by calling into libuuid. We don't want to
+ * mandate libuuid as a dependency for every utilitity that wants to link
+ * libvboot_host.a, since they usually don't use the functionality that needs
+ * to generate new UUIDs anyway (just other functionality implemented in the
+ * same files).
+ */
 #ifndef HAVE_MACOS
-int GenerateGuid(Guid *newguid) __attribute__((weak, alias("__GenerateGuid")));
+__attribute__((weak)) int GenerateGuid(Guid *newguid) { return CGPT_FAILED; };
 #endif
