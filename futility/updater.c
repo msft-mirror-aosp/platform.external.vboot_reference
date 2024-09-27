@@ -71,6 +71,24 @@ static void override_dut_property(enum dut_property_type property_type,
 }
 
 /*
+ * Overrides DUT properties with default values.
+ * With emulation, dut_get_property() calls would fail without specifying the
+ * fake DUT properties via --sys_props. Therefore, this function provides
+ * reasonable default values for emulation.
+ */
+static void override_properties_with_default(struct updater_config *cfg)
+{
+	assert(cfg->emulation);
+
+	override_dut_property(DUT_PROP_MAINFW_ACT, cfg, SLOT_A);
+	override_dut_property(DUT_PROP_TPM_FWVER, cfg, 0x10001);
+	override_dut_property(DUT_PROP_PLATFORM_VER, cfg, 0);
+	override_dut_property(DUT_PROP_WP_HW, cfg, 0);
+	override_dut_property(DUT_PROP_WP_SW_AP, cfg, 0);
+	override_dut_property(DUT_PROP_WP_SW_EC, cfg, 0);
+}
+
+/*
  * Overrides DUT properties from a given list.
  * The list should be string of integers eliminated by comma and/or space.
  * For example, "1 2 3" and "1,2,3" both overrides first 3 properties.
@@ -113,14 +131,12 @@ static void override_properties_from_list(const char *override_list,
 	}
 }
 
-/* Gets the value (setting) of specified quirks from updater configuration. */
 int get_config_quirk(enum quirk_types quirk, const struct updater_config *cfg)
 {
 	assert(quirk < QUIRK_MAX);
 	return cfg->quirks[quirk].value;
 }
 
-/* Prints the name and description from all supported quirks. */
 void updater_list_config_quirks(const struct updater_config *cfg)
 {
 	const struct quirk_entry *entry = cfg->quirks;
@@ -580,9 +596,6 @@ static int check_compatible_platform(struct updater_config *cfg)
 	return strncasecmp(image_from->ro_version, image_to->ro_version, len);
 }
 
-/*
- * Returns a valid root key from GBB header, or NULL on failure.
- */
 const struct vb2_packed_key *get_rootkey(
 		const struct vb2_gbb_header *gbb)
 {
@@ -1132,10 +1145,6 @@ static enum updater_error_codes update_whole_firmware(
 	return UPDATE_ERR_DONE;
 }
 
-/*
- * The main updater to update system firmware using the configuration parameter.
- * Returns UPDATE_ERR_DONE if success, otherwise failure.
- */
 enum updater_error_codes update_firmware(struct updater_config *cfg)
 {
 	bool done = false;
@@ -1243,10 +1252,6 @@ enum updater_error_codes update_firmware(struct updater_config *cfg)
 	return r;
 }
 
-/*
- * Allocates and initializes a updater_config object with default values.
- * Returns the newly allocated object, or NULL on error.
- */
 struct updater_config *updater_new_config(void)
 {
 	struct updater_config *cfg = (struct updater_config *)calloc(
@@ -1350,37 +1355,6 @@ static int updater_output_image(const struct firmware_image *image,
 }
 
 /*
- * Applies custom label information to an existing model config.
- * Returns 0 on success, otherwise failure.
- */
-static int updater_apply_custom_label(struct updater_config *cfg,
-				     struct model_config *model,
-				     const char *signature_id)
-{
-	const char *tmp_image = NULL;
-
-	assert(model->is_custom_label);
-	if (!signature_id) {
-		if (!cfg->image_current.data) {
-			INFO("Loading system firmware for custom label...\n");
-			load_system_firmware(cfg, &cfg->image_current);
-		}
-		tmp_image = get_firmware_image_temp_file(
-				&cfg->image_current, &cfg->tempfiles);
-		if (!tmp_image) {
-			ERROR("Failed to get system current firmware\n");
-			return 1;
-		}
-		if (get_config_quirk(QUIRK_OVERRIDE_SIGNATURE_ID, cfg) &&
-		    is_ap_write_protection_enabled(cfg))
-			quirk_override_signature_id(
-					cfg, model, &signature_id);
-	}
-	return !!model_apply_custom_label(
-			model, cfg->archive, signature_id, tmp_image);
-}
-
-/*
  * Setup what the updater has to do against an archive.
  * Returns number of failures, or 0 on success.
  */
@@ -1412,29 +1386,44 @@ static int updater_setup_archive(
 	errorcnt += updater_load_images(
 			cfg, arg, model->image, model->ec_image);
 
-	if (model->is_custom_label && !manifest->has_keyset) {
+	if (model->has_custom_label) {
+
+		if (!cfg->image_current.data) {
+			INFO("Loading system firmware for custom label...\n");
+			load_system_firmware(cfg, &cfg->image_current);
+		}
+
+		const char *signature_id = arg->signature_id;
+		const struct model_config *base_model = model;
+
+		if (!signature_id &&
+		    get_config_quirk(QUIRK_OVERRIDE_SIGNATURE_ID, cfg) &&
+		    is_ap_write_protection_enabled(cfg))
+			quirk_override_signature_id(
+					cfg, model, &signature_id);
+
 		/*
-		 * Developers running unsigned updaters (usually local build)
-		 * won't be able match any custom label tags.
+		 * For custom label devices, manifest_find_model may return the
+		 * base model instead of the custom label ones so we have to
+		 * look up again using the signature_id.
 		 */
-		WARN("No keysets found - this is probably a local build of \n"
-		     "unsigned firmware updater. Skip applying custom label.");
-	} else if (model->is_custom_label) {
+		model = manifest_find_custom_label_model(
+				cfg, manifest, base_model, signature_id);
+		if (!model)
+			return ++errorcnt;
 		/*
-		 * It is fine to fail in updater_apply_custom_label for factory
-		 * mode so we are not checking the return value; instead we
-		 * verify if the patches do contain new root key.
+		 * All custom label models should share the same image, so we
+		 * don't need to reload again - just pick up the new config and
+		 * patch later. We don't care about EC images because that will
+		 * be updated by software sync in the end.
+		 * Here we want to double check if that assumption is correct.
 		 */
-		updater_apply_custom_label(cfg, (struct model_config *)model,
-					  arg->signature_id);
-		if (!model->patches.rootkey) {
-			if (is_factory ||
-			    is_ap_write_protection_enabled(cfg) ||
-			    get_config_quirk(QUIRK_ALLOW_EMPTY_CUSTOM_LABEL_TAG,
-					     cfg)) {
-				WARN("No VPD for custom label.\n");
-			} else {
-				ERROR("Need VPD set for custom label.\n");
+		if (base_model->image) {
+			if (!model->image ||
+			    strcmp(base_model->image, model->image)) {
+				ERROR("The firmware image for custom label [%s] "
+				      "does not match its base model [%s]\n",
+				      base_model->name, model->name);
 				return ++errorcnt;
 			}
 		}
@@ -1688,6 +1677,8 @@ int updater_setup_config(struct updater_config *cfg,
 	if (prog_arg_emulation(cfg, arg, &check_single_image) < 0)
 		return 1;
 
+	if (arg->emulation)
+		override_properties_with_default(cfg);
 	if (arg->sys_props)
 		override_properties_from_list(arg->sys_props, cfg);
 	if (arg->write_protection) {
@@ -1846,9 +1837,6 @@ int handle_flash_argument(struct updater_config_arguments *args, int opt,
 	return 1;
 }
 
-/*
- * Releases all resources in an updater configuration object.
- */
 void updater_delete_config(struct updater_config *cfg)
 {
 	assert(cfg);
