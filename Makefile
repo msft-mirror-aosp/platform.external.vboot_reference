@@ -217,6 +217,10 @@ else
 CFLAGS += -DEXTERNAL_TPM_CLEAR_REQUEST=0
 endif
 
+# Directory used by crossystem to create a lock file
+CROSSYSTEM_LOCK_DIR := /run/lock
+CFLAGS += -DCROSSYSTEM_LOCK_DIR=\"${CROSSYSTEM_LOCK_DIR}\"
+
 # NOTE: We don't use these files but they are useful for other packages to
 # query about required compiling/linking flags.
 PC_IN_FILES = vboot_host.pc.in
@@ -966,7 +970,7 @@ ${FWLIB}: ${FWLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 .PHONY: tlcl
 tlcl: ${TLCL}
@@ -975,7 +979,7 @@ ${TLCL}: ${TLCL_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 # ----------------------------------------------------------------------------
 # Host library(s)
@@ -994,7 +998,7 @@ ${UTILLIB}: ${UTILLIB_OBJS} ${FWLIB_OBJS} ${TLCL_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 .PHONY: hostlib
 hostlib: ${HOSTLIB} ${HOSTLIB_STATIC}
@@ -1004,7 +1008,7 @@ ${HOSTLIB_STATIC}: ${HOSTLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 ${HOSTLIB}: ${HOSTLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
@@ -1200,7 +1204,7 @@ ${TESTLIB}: ${TESTLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 DUT_TEST_BINS = $(addprefix ${BUILD}/,${DUT_TEST_NAMES})
 
