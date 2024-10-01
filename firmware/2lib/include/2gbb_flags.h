@@ -59,12 +59,13 @@ enum vb2_gbb_flag {
 	VB2_GBB_FLAG_FORCE_DEV_BOOT_ALTFW = 1 << 7,
 
 	/*
-	 * Currently running FAFT tests.  May be used as a hint to disable
-	 * other debug features which may interfere with tests.  However, this
-	 * should never be used to modify Chrome OS behaviour on specific
-	 * devices with the goal of passing a test.  See chromium:965914 for
-	 * more information.
+	 * This flag must never be used by anyone for any reason. It was created to
+	 * disable certain debugging features in vendor provided blobs so that they
+	 * could be used while running FAFT, but the flag has been misused elsewhere
+	 * and is now deprecated.
+	 * TODO: Remove VB2_GBB_FLAG_RUNNING_FAFT
 	 */
+	VB2_GBB_FLAG_DEPRECATED_RUNNING_FAFT = 1 << 8,
 	VB2_GBB_FLAG_RUNNING_FAFT = 1 << 8,
 
 	/* Disable EC software sync */
@@ -93,6 +94,9 @@ enum vb2_gbb_flag {
 
 	/* Enable USB Device Controller */
 	VB2_GBB_FLAG_ENABLE_UDC = 1 << 16,
+
+	/* Enforce CSE SYNC, even if current CSE is same as CBFS CSE */
+	VB2_GBB_FLAG_FORCE_CSE_SYNC = 1 << 17,
 };
 
 vb2_error_t vb2_get_gbb_flag_description(enum vb2_gbb_flag flag,
