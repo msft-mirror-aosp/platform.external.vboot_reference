@@ -32,6 +32,7 @@ static const char * const FMAP_RO = "WP_RO",
 		  * const FMAP_RW_SHARED = "RW_SHARED",
 		  * const FMAP_RW_LEGACY = "RW_LEGACY",
 		  * const FMAP_RW_VPD = "RW_VPD",
+		  * const FMAP_RW_DIAG_NVRAM = "DIAG_NVRAM",
 		  * const FMAP_SI_DESC = "SI_DESC",
 		  * const FMAP_SI_ME = "SI_ME";
 
@@ -55,7 +56,6 @@ enum quirk_types {
 	QUIRK_CLEAR_MRC_DATA,
 	QUIRK_PRESERVE_ME,
 	/* Platform-specific quirks (removed after AUE) */
-	QUIRK_ALLOW_EMPTY_CUSTOM_LABEL_TAG,
 	QUIRK_OVERRIDE_SIGNATURE_ID,
 	QUIRK_EVE_SMM_STORE,
 	QUIRK_UNLOCK_CSME_EVE,
@@ -166,8 +166,7 @@ struct model_config {
 	char *name;
 	char *image, *ec_image;
 	struct patch_config patches;
-	char *signature_id;
-	int is_custom_label;
+	bool has_custom_label;
 };
 
 struct manifest {
@@ -175,7 +174,6 @@ struct manifest {
 	struct model_config *models;
 	struct u_archive *archive;
 	int default_model;
-	int has_keyset;
 };
 
 enum updater_error_codes {
@@ -270,8 +268,8 @@ char * updater_get_cbfs_quirks(struct updater_config *cfg);
  * Overrides signature id if the device was shipped with known
  * special rootkey.
  */
-int quirk_override_signature_id(struct updater_config *cfg,
-				struct model_config *model,
+int quirk_override_signature_id(const struct updater_config *cfg,
+				const struct model_config *model,
 				const char **signature_id);
 
 /* Functions from updater_archive.c */
@@ -368,15 +366,16 @@ manifest_detect_model_from_frid(struct updater_config *cfg,
 				struct manifest *manifest);
 
 /*
- * Applies custom label information to an existing model configuration.
- * Collects signature ID information from either parameter signature_id or
- * image file (via VPD) and updates model.patches for key files.
- * Returns 0 on success, otherwise failure.
+ * Finds the custom label model config from the base model + system tag.
+ * The system tag came from the firmware VPD section.
+ * We may also override model+tag by the 'signature' parameter.
+ * Returns the matched model_config, base if no applicable custom label data,
+ * or NULL for any critical error.
  */
-int model_apply_custom_label(
-		struct model_config *model,
-		struct u_archive *archive,
-		const char *signature_id,
-		const char *image);
+const struct model_config *manifest_find_custom_label_model(
+		struct updater_config *cfg,
+		const struct manifest *manifest,
+		const struct model_config *base_model,
+		const char *signature);
 
 #endif  /* VBOOT_REFERENCE_FUTILITY_UPDATER_H_ */
