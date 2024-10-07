@@ -1,2 +1,5 @@
-include platform/system/core:main:/janitors/OWNERS
+jwerner@chromium.org
+yupingso@chromium.org
+hungte@chromium.org
+roccochen@chromium.org
 czapiga@google.com

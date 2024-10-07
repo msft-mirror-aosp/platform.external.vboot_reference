@@ -156,9 +156,9 @@ vb2_error_t vb2_get_gbb_flag_description(enum vb2_gbb_flag flag,
 		*description =
 			"Allow booting Legacy OSes even if dev_boot_altfw=0.";
 		break;
-	case VB2_GBB_FLAG_RUNNING_FAFT:
-		*name = "VB2_GBB_FLAG_RUNNING_FAFT";
-		*description = "Currently running FAFT tests.";
+	case VB2_GBB_FLAG_DEPRECATED_RUNNING_FAFT:
+		*name = "VB2_GBB_FLAG_DEPRECATED_RUNNING_FAFT";
+		*description = "Deprecated, do not use.";
 		break;
 	case VB2_GBB_FLAG_DISABLE_EC_SOFTWARE_SYNC:
 		*name = "VB2_GBB_FLAG_DISABLE_EC_SOFTWARE_SYNC";
@@ -192,6 +192,10 @@ vb2_error_t vb2_get_gbb_flag_description(enum vb2_gbb_flag flag,
 	case VB2_GBB_FLAG_ENABLE_UDC:
 		*name = "VB2_GBB_FLAG_ENABLE_UDC";
 		*description = "Enable USB Device Controller.";
+		break;
+	case VB2_GBB_FLAG_FORCE_CSE_SYNC:
+		*name = "VB2_GBB_FLAG_FORCE_CSE_SYNC";
+		*description = "Always sync CSE, even if it is same as CBFS CSE";
 		break;
 	default:
 		*name = NULL;
