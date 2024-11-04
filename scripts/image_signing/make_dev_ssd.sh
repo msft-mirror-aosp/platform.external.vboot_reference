@@ -99,7 +99,10 @@ remove_rootfs_verification() {
     rw_root_opt="s| rw | ro |"
   fi
 
-  local ptracer_opt="proc_mem.restrict_write=ptracer proc_mem.restrict_foll_force=ptracer"
+  local ptracer_opt="proc_mem.restrict_write=ptracer proc_mem.force_override=ptrace"
+  # This is kept for compatibility with ChromeOS kernels until all of them
+  # are up-to-date with the corresponding stable branch.
+  ptracer_opt="${ptracer_opt} proc_mem.restrict_foll_force=ptracer"
   if [ "${FLAGS_enable_proc_mem_ptrace}" = "${FLAGS_FALSE}" ]; then
     # we could set proc_mem.restrict_write=all, however that's already default
     # via Kconfig and we don't want to clutter the cmdline with redundant params
@@ -202,6 +205,14 @@ find_valid_kernel_partitions() {
 resign_ssd_kernel() {
   local ssd_device="$1"
   local bs="$(blocksize "${ssd_device}")"
+
+  # `fflash` and `cros flash` write their updates to block device partitions,
+  # while this script uses the parent block device plus a block offset.
+  # Sync and flush the page cache to avoid cache aliasing issues.
+  sync; sync; sync
+  if [ -w /proc/sys/vm/drop_caches ]; then
+    echo 1 > /proc/sys/vm/drop_caches
+  fi
 
   # reasonable size for current kernel partition
   local min_kernel_size=$((8000 * 1024 / bs))
@@ -385,10 +396,13 @@ resign_ssd_kernel() {
       fi
     fi
 
-    # Sometimes doing "dump_kernel_config" or other I/O now (or after return to
-    # shell) will get the data before modification. Not a problem now, but for
-    # safety, let's try to sync more.
+    # `fflash` and `cros flash` write their updates to block device partitions,
+    # while this script uses the parent block device plus a block offset.
+    # Sync and flush the page cache to avoid cache aliasing issues.
     sync; sync; sync
+    if [ -w /proc/sys/vm/drop_caches ]; then
+      echo 1 > /proc/sys/vm/drop_caches
+    fi
 
     info "${name}: Re-signed with developer keys successfully."
   done
