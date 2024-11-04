@@ -183,10 +183,6 @@ ifneq ($(filter-out 0,${NDEBUG}),)
 CFLAGS += -DNDEBUG
 endif
 
-ifneq ($(filter-out 0,${FORCE_LOGGING_ON}),)
-CFLAGS += -DFORCE_LOGGING_ON=${FORCE_LOGGING_ON}
-endif
-
 ifneq ($(filter-out 0,${TPM2_MODE}),)
 CFLAGS += -DTPM2_MODE
 endif
@@ -216,6 +212,10 @@ CFLAGS += -DEXTERNAL_TPM_CLEAR_REQUEST=1
 else
 CFLAGS += -DEXTERNAL_TPM_CLEAR_REQUEST=0
 endif
+
+# Configurable temporary directory for host tools
+VBOOT_TMP_DIR := /tmp
+CFLAGS += -DVBOOT_TMP_DIR=\"${VBOOT_TMP_DIR}\"
 
 # Directory used by crossystem to create a lock file
 CROSSYSTEM_LOCK_DIR := /run/lock
