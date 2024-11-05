@@ -1,17 +1,21 @@
-name: "vboot_reference"
-description:
-    "Google's Verified Boot reference implementation (versions 1.x & 2.x) and "
-    "helper tools"
+# This project was upgraded with external_updater.
+# Usage: tools/external_updater/updater.sh update external/vboot_reference
+# For more info, check https://cs.android.com/android/platform/superproject/main/+/main:tools/external_updater/README.md
 
+name: "vboot_reference"
+description: "Google\'s Verified Boot reference implementation (versions 1.x & 2.x) and helper tools"
 third_party {
+  license_type: RESTRICTED
+  license_note: "would be NOTICE save for scripts/image_signing/lib/shflags/shflags"
+  last_upgrade_date {
+    year: 2024
+    month: 10
+    day: 31
+  }
   identifier {
     type: "Git"
     value: "https://chromium.googlesource.com/chromiumos/platform/vboot_reference"
+    version: "3662103165a35b422552e24aeb5af0b8ec051cb6"
     primary_source: true
-    version: "4b12d392e5b12de29c582df4e717b1228e9f1594"
   }
-  version: "4b12d392e5b12de29c582df4e717b1228e9f1594"
-  last_upgrade_date { year: 2024 month: 7 day: 22 }
-  license_note: "would be NOTICE save for scripts/image_signing/lib/shflags/shflags"
-  license_type: RESTRICTED
 }

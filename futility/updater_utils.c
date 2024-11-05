@@ -7,6 +7,7 @@
 
 #include <assert.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <string.h>
@@ -23,11 +24,6 @@
 
 #define COMMAND_BUFFER_SIZE 256
 
-/*
- * Strips a string (usually from shell execution output) by removing all the
- * trailing characters in pattern. If pattern is NULL, match by space type
- * characters (space, new line, tab, ... etc).
- */
 void strip_string(char *s, const char *pattern)
 {
 	int len;
@@ -46,10 +42,6 @@ void strip_string(char *s, const char *pattern)
 	}
 }
 
-/*
- * Saves everything from stdin to given output file.
- * Returns 0 on success, otherwise failure.
- */
 int save_file_from_stdin(const char *output)
 {
 	FILE *in = stdin, *out = fopen(output, "wb");
@@ -111,6 +103,16 @@ static int load_firmware_version(struct firmware_image *image,
 	return 0;
 }
 
+static bool has_printable_ecrw_version(const struct firmware_image *image)
+{
+	/*
+	 * Wilco family (sarien & drallion) has binary ecrw version which may
+	 * contain non-printable characters. Those images can be identified by
+	 * checking if the DIAG_NVRAM FMAP section exists or not.
+	 */
+	return !firmware_section_exists(image, FMAP_RW_DIAG_NVRAM);
+}
+
 /*
  * Loads the version of "ecrw" CBFS file within `section_name` of `image_file`.
  * Returns the version string on success; otherwise an empty string.
@@ -124,6 +126,9 @@ static char *load_ecrw_version(const struct firmware_image *image,
 
 	/* EC image or older AP images may not have the section. */
 	if (!firmware_section_exists(image, section_name))
+		goto done;
+
+	if (!has_printable_ecrw_version(image))
 		goto done;
 
 	const char *ecrw_version_file = create_temp_file(&tempfile_head);
@@ -256,11 +261,6 @@ void check_firmware_versions(const struct firmware_image *image)
 		     FMAP_RW_FW_MAIN_B, image->ecrw_version_b);
 }
 
-/*
- * Generates a temporary file for snapshot of firmware image contents.
- *
- * Returns a file path if success, otherwise NULL.
- */
 const char *get_firmware_image_temp_file(const struct firmware_image *image,
 					 struct tempfile *tempfiles)
 {
@@ -277,9 +277,6 @@ const char *get_firmware_image_temp_file(const struct firmware_image *image,
 	return tmp_path;
 }
 
-/*
- * Frees the allocated resource from a firmware image object.
- */
 void free_firmware_image(struct firmware_image *image)
 {
 	/*
@@ -305,11 +302,6 @@ int reload_firmware_image(const char *file_path, struct firmware_image *image)
 	return load_firmware_image(image, file_path, NULL);
 }
 
-/*
- * Finds a firmware section by given name in the firmware image.
- * If successful, return zero and *section argument contains the address and
- * size of the section; otherwise failure.
- */
 int find_firmware_section(struct firmware_section *section,
 			  const struct firmware_image *image,
 			  const char *section_name)
@@ -329,9 +321,6 @@ int find_firmware_section(struct firmware_section *section,
 	return 0;
 }
 
-/*
- * Returns true if the given FMAP section exists in the firmware image.
- */
 int firmware_section_exists(const struct firmware_image *image,
 			    const char *section_name)
 {
@@ -340,14 +329,6 @@ int firmware_section_exists(const struct firmware_image *image,
 	return section.data != NULL;
 }
 
-/*
- * Preserves (copies) the given section (by name) from image_from to image_to.
- * The offset may be different, and the section data will be directly copied.
- * If the section does not exist on either images, return as failure.
- * If the source section is larger, contents on destination be truncated.
- * If the source section is smaller, the remaining area is not modified.
- * Returns 0 if success, non-zero if error.
- */
 int preserve_firmware_section(const struct firmware_image *image_from,
 			      struct firmware_image *image_to,
 			      const char *section_name)
@@ -370,10 +351,6 @@ int preserve_firmware_section(const struct firmware_image *image_from,
 	return 0;
 }
 
-/*
- * Finds the GBB (Google Binary Block) header on a given firmware image.
- * Returns a pointer to valid GBB header, or NULL on not found.
- */
 const struct vb2_gbb_header *find_gbb(const struct firmware_image *image)
 {
 	struct firmware_section section;
@@ -404,27 +381,16 @@ static bool is_write_protection_enabled(struct updater_config *cfg,
 	return wp_enabled;
 }
 
-/*
- * Returns true if the AP write protection is enabled on current system.
- */
 inline bool is_ap_write_protection_enabled(struct updater_config *cfg)
 {
 	return is_write_protection_enabled(cfg, cfg->image.programmer, DUT_PROP_WP_SW_AP);
 }
 
-/*
- * Returns true if the EC write protection is enabled on current system.
- */
 inline bool is_ec_write_protection_enabled(struct updater_config *cfg)
 {
 	return is_write_protection_enabled(cfg, cfg->ec_image.programmer, DUT_PROP_WP_SW_EC);
 }
 
-/*
- * Executes a command on current host and returns stripped command output.
- * If the command has failed (exit code is not zero), returns an empty string.
- * The caller is responsible for releasing the returned string.
- */
 char *host_shell(const char *command)
 {
 	/* Currently all commands we use do not have large output. */
@@ -466,10 +432,6 @@ void prepare_servo_control(const char *control_name, bool on)
 	free(cmd);
 }
 
-/*
- * Helper function to detect type of Servo board attached to host.
- * Returns a string as programmer parameter on success, otherwise NULL.
- */
 char *host_detect_servo(const char **prepare_ctrl_name)
 {
 	const char *servo_port = getenv(ENV_SERVOD_PORT);
@@ -562,6 +524,7 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 
 	return ret;
 }
+
 /*
  * Returns 1 if the programmers in image1 and image2 are the same.
  */
@@ -598,17 +561,21 @@ int load_system_firmware(struct updater_config *cfg,
 		INFO("Reading SPI Flash..\n");
 		r = flashrom_read_image(image, NULL, 0, verbose);
 	}
-	if (!r)
+	if (r) {
+		/* Read failure, the content cannot be trusted. */
+		free_firmware_image(image);
+	} else {
+		/*
+		 * Parse the contents. Note the image->data will remain even
+		 * if parsing failed - this is important for system firmware
+		 * because we may be trying to recover a device with corrupted
+		 * firmware.
+		 */
 		r = parse_firmware_image(image);
+	}
 	return r;
 }
 
-/*
- * Writes sections from a given firmware image to the system firmware.
- * Regions should be NULL for writing the whole image, or a list of
- * FMAP section names (and ended with a NULL).
- * Returns 0 if success, non-zero if error.
- */
 int write_system_firmware(struct updater_config *cfg,
 			  const struct firmware_image *image,
 			  const char * const regions[],
@@ -645,15 +612,11 @@ int write_system_firmware(struct updater_config *cfg,
 	return r;
 }
 
-/*
- * Helper function to create a new temporary file.
- * All files created will be removed remove_all_temp_files().
- * Returns the path of new file, or NULL on failure.
- */
 const char *create_temp_file(struct tempfile *head)
 {
 	struct tempfile *new_temp;
-	char new_path[] = P_tmpdir "/fwupdater.XXXXXX";
+	char new_path[] = VBOOT_TMP_DIR "/fwupdater.XXXXXX";
+
 	int fd;
 	mode_t umask_save;
 
@@ -683,10 +646,6 @@ const char *create_temp_file(struct tempfile *head)
 	return new_temp->filepath;
 }
 
-/*
- * Helper function to remove all files created by create_temp_file().
- * This is intended to be called only once at end of program execution.
- */
 void remove_all_temp_files(struct tempfile *head)
 {
 	/* head itself is dummy and should not be removed. */
@@ -704,9 +663,6 @@ void remove_all_temp_files(struct tempfile *head)
 	}
 }
 
-/*
- * Returns rootkey hash of firmware image, or NULL on failure.
- */
 const char *get_firmware_rootkey_hash(const struct firmware_image *image)
 {
 	const struct vb2_gbb_header *gbb = NULL;
@@ -729,11 +685,6 @@ const char *get_firmware_rootkey_hash(const struct firmware_image *image)
 	return packed_key_sha1_string(rootkey);
 }
 
-/*
- * Overwrite the given offset of a section in the firmware image with the
- * given values.
- * Returns 0 on success, otherwise failure.
- */
 int overwrite_section(struct firmware_image *image,
 			     const char *fmap_section, size_t offset,
 			     size_t size, const uint8_t *new_values)
