@@ -266,7 +266,7 @@ static const char *decide_rw_target(struct updater_config *cfg,
 static int set_try_cookies(struct updater_config *cfg, const char *target,
 			   int has_update)
 {
-	int tries = 11;
+	int tries = 13;
 	const char *slot;
 
 	if (!has_update)
@@ -1322,11 +1322,17 @@ static int updater_load_images(struct updater_config *cfg,
 		if (!errorcnt)
 			errorcnt += updater_setup_quirks(cfg, arg);
 	}
-	if (arg->host_only || arg->emulation)
+
+	/*
+	 * In emulation mode, we want to prevent unexpected writing to EC
+	 * so we should not load EC; however in output mode that is fine.
+	 */
+	if (arg->host_only || (arg->emulation && !cfg->output_only))
 		return errorcnt;
 
 	if (!cfg->ec_image.data && ec_image)
 		errorcnt += !!load_firmware_image(&cfg->ec_image, ec_image, ar);
+
 	return errorcnt;
 }
 
@@ -1386,29 +1392,54 @@ static int updater_setup_archive(
 	errorcnt += updater_load_images(
 			cfg, arg, model->image, model->ec_image);
 
-	if (model->has_custom_label) {
+	/*
+	 * For custom label devices, we have to read the system firmware
+	 * (image_current) to get the tag from VPD. Some quirks may also need
+	 * the system firmware to identify if they should override the tags.
+	 *
+	 * The only exception is `--mode=output` (cfg->output_only), which we
+	 * usually add `--model=MODEL` to specify the target model (note some
+	 * people may still run without `--model` to get "the image to update
+	 * when running on this device"). The MODEL can be either the BASEMODEL
+	 * (has_custom_label=true) or BASEMODEL-TAG (has_custom_label=false).
+	 * So the only case we have to warn the user that they may forget to
+	 * provide the TAG is when has_custom_label=true (only BASEMODEL).
+	 */
+	if (cfg->output_only && arg->model && model->has_custom_label) {
+		printf(">> Generating output for a custom label device without tags (e.g., base model). "
+		       "The firmware images will be signed using the base model (or DEFAULT) keys. "
+		       "To get the images signed by the LOEM keys, "
+		       "add the corresponding tag from one of the following list: \n");
 
+		size_t len = strlen(arg->model);
+		bool printed = false;
+		int i;
+
+		for (i = 0; i < manifest->num; i++) {
+			const struct model_config *m = &manifest->models[i];
+			if (strncmp(m->name, arg->model, len) || m->name[len] != '-')
+				continue;
+			printf("%s `--model=%s`", printed ? "," : "", m->name);
+			printed = true;
+		}
+		printf("\n\n");
+	} else if (model->has_custom_label) {
 		if (!cfg->image_current.data) {
 			INFO("Loading system firmware for custom label...\n");
 			load_system_firmware(cfg, &cfg->image_current);
 		}
 
-		const char *signature_id = arg->signature_id;
-		const struct model_config *base_model = model;
-
-		if (!signature_id &&
-		    get_config_quirk(QUIRK_OVERRIDE_SIGNATURE_ID, cfg) &&
-		    is_ap_write_protection_enabled(cfg))
-			quirk_override_signature_id(
-					cfg, model, &signature_id);
-
+		if (!cfg->image_current.data) {
+			ERROR("Cannot read the system firmware for tags.\n");
+			return ++errorcnt;
+		}
 		/*
 		 * For custom label devices, manifest_find_model may return the
 		 * base model instead of the custom label ones so we have to
-		 * look up again using the signature_id.
+		 * look up again.
 		 */
-		model = manifest_find_custom_label_model(
-				cfg, manifest, base_model, signature_id);
+		const struct model_config *base_model = model;
+		model = manifest_find_custom_label_model(cfg, manifest, base_model);
 		if (!model)
 			return ++errorcnt;
 		/*
@@ -1481,8 +1512,7 @@ static int check_arg_compatibility(
 }
 
 static int parse_arg_mode(struct updater_config *cfg,
-			  const struct updater_config_arguments *arg,
-			  bool *do_output)
+			  const struct updater_config_arguments *arg)
 {
 	if (!arg->mode)
 		return 0;
@@ -1501,7 +1531,7 @@ static int parse_arg_mode(struct updater_config *cfg,
 		   strcmp(arg->mode, "factory_install") == 0) {
 		cfg->factory_update = 1;
 	} else if (strcmp(arg->mode, "output") == 0) {
-		*do_output = 1;
+		cfg->output_only = true;
 	} else {
 		ERROR("Invalid mode: %s\n", arg->mode);
 		return -1;
@@ -1638,7 +1668,6 @@ int updater_setup_config(struct updater_config *cfg,
 	int errorcnt = 0;
 	int check_wp_disabled = 0;
 	bool check_single_image = false;
-	bool do_output = false;
 	const char *archive_path = arg->archive;
 
 	/* Setup values that may change output or decision of other argument. */
@@ -1661,7 +1690,7 @@ int updater_setup_config(struct updater_config *cfg,
 	if (arg->try_update)
 		cfg->try_update = TRY_UPDATE_AUTO;
 
-	if (parse_arg_mode(cfg, arg, &do_output) < 0)
+	if (parse_arg_mode(cfg, arg) < 0)
 		return 1;
 
 	if (cfg->factory_update) {
@@ -1752,7 +1781,7 @@ int updater_setup_config(struct updater_config *cfg,
 		errorcnt += !!setup_config_quirks(arg->quirks, cfg);
 
 	/* Additional checks. */
-	if (check_single_image && !do_output && cfg->ec_image.data) {
+	if (check_single_image && !cfg->output_only && cfg->ec_image.data) {
 		errorcnt++;
 		ERROR("EC/PD images are not supported in current mode.\n");
 	}
@@ -1771,7 +1800,7 @@ int updater_setup_config(struct updater_config *cfg,
 	}
 
 	/* The images are ready for updating. Output if needed. */
-	if (!errorcnt && do_output) {
+	if (!errorcnt && cfg->output_only) {
 		const char *r = arg->output_dir;
 		if (!r)
 			r = ".";
