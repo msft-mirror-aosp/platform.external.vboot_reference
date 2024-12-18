@@ -183,10 +183,6 @@ ifneq ($(filter-out 0,${NDEBUG}),)
 CFLAGS += -DNDEBUG
 endif
 
-ifneq ($(filter-out 0,${FORCE_LOGGING_ON}),)
-CFLAGS += -DFORCE_LOGGING_ON=${FORCE_LOGGING_ON}
-endif
-
 ifneq ($(filter-out 0,${TPM2_MODE}),)
 CFLAGS += -DTPM2_MODE
 endif
@@ -216,6 +212,14 @@ CFLAGS += -DEXTERNAL_TPM_CLEAR_REQUEST=1
 else
 CFLAGS += -DEXTERNAL_TPM_CLEAR_REQUEST=0
 endif
+
+# Configurable temporary directory for host tools
+VBOOT_TMP_DIR := /tmp
+CFLAGS += -DVBOOT_TMP_DIR=\"${VBOOT_TMP_DIR}\"
+
+# Directory used by crossystem to create a lock file
+CROSSYSTEM_LOCK_DIR := /run/lock
+CFLAGS += -DCROSSYSTEM_LOCK_DIR=\"${CROSSYSTEM_LOCK_DIR}\"
 
 # NOTE: We don't use these files but they are useful for other packages to
 # query about required compiling/linking flags.
@@ -966,7 +970,7 @@ ${FWLIB}: ${FWLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 .PHONY: tlcl
 tlcl: ${TLCL}
@@ -975,7 +979,7 @@ ${TLCL}: ${TLCL_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 # ----------------------------------------------------------------------------
 # Host library(s)
@@ -994,7 +998,7 @@ ${UTILLIB}: ${UTILLIB_OBJS} ${FWLIB_OBJS} ${TLCL_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 .PHONY: hostlib
 hostlib: ${HOSTLIB} ${HOSTLIB_STATIC}
@@ -1004,7 +1008,7 @@ ${HOSTLIB_STATIC}: ${HOSTLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 ${HOSTLIB}: ${HOSTLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
@@ -1145,7 +1149,7 @@ FUTIL_LIBS = ${CROSID_LIBS} ${CRYPTO_LIBS} ${LIBZIP_LIBS} ${LIBARCHIVE_LIBS} \
 	${FLASHROM_LIBS}
 
 ${FUTIL_BIN}: LDLIBS += ${FUTIL_LIBS}
-${FUTIL_BIN}: ${FUTIL_OBJS} ${UTILLIB} ${FWLIB}
+${FUTIL_BIN}: ${FUTIL_OBJS} ${UTILLIB}
 	@${PRINTF} "    LD            $(subst ${BUILD}/,,$@)\n"
 	${Q}${LD} -o $@ ${LDFLAGS} $^ ${LDLIBS}
 
@@ -1200,7 +1204,7 @@ ${TESTLIB}: ${TESTLIB_OBJS}
 	@${PRINTF} "    RM            $(subst ${BUILD}/,,$@)\n"
 	${Q}rm -f $@
 	@${PRINTF} "    AR            $(subst ${BUILD}/,,$@)\n"
-	${Q}ar qc $@ $^
+	${Q}ar qcT $@ $^
 
 DUT_TEST_BINS = $(addprefix ${BUILD}/,${DUT_TEST_NAMES})
 
