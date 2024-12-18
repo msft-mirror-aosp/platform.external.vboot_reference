@@ -24,6 +24,7 @@ enum {
 	OPT_GBB_FLAGS,
 	OPT_HOST_ONLY,
 	OPT_MANIFEST,
+	OPT_PARSEABLE_MANIFEST,
 	OPT_MODEL,
 	OPT_OUTPUT_DIR,
 	OPT_QUIRKS,
@@ -60,6 +61,7 @@ static struct option const long_opts[] = {
 	{"quirks", 1, NULL, OPT_QUIRKS},
 	{"list-quirks", 0, NULL, OPT_QUIRKS_LIST},
 	{"manifest", 0, NULL, OPT_MANIFEST},
+	{"parseable-manifest", 0, NULL, OPT_PARSEABLE_MANIFEST},
 	{"model", 1, NULL, OPT_MODEL},
 	{"output_dir", 1, NULL, OPT_OUTPUT_DIR},
 	{"repack", 1, NULL, OPT_REPACK},
@@ -108,6 +110,9 @@ static void print_help(int argc, char *argv[])
 		"    --list-quirks   \tPrint all available quirks\n"
 		"-m, --mode=MODE     \tRun updater in the specified mode\n"
 		"    --manifest      \tScan the archive to print a manifest in JSON\n"
+		"    --parseable-manifest\n"
+		"                    \tScan the archive to print a manifest\n"
+		"                    \tin shell-parseable format\n"
 		SHARED_FLASH_ARGS_HELP
 		"\n"
 		" * Option --manifest requires either -a,--archive or -i,--image\n"
@@ -118,11 +123,10 @@ static void print_help(int argc, char *argv[])
 		"   cached manifest (may be out-dated) from the archive.\n"
 		"   Works only with -a,--archive option.\n"
 		" * Use of -p,--programmer with option other than '%s',\n"
-		"   or with --ccd effectively disables ability to update EC and PD\n"
+		"   or with --ccd effectively disables ability to update EC\n"
 		"   firmware images.\n"
-		" * Emulation works only with AP (host) firmware image, and does\n"
-		"   not accept EC or PD firmware image, and does not work\n"
-		"   with --mode=output\n"
+		" * Emulation works only with the AP (host) firmware image, and\n"
+		"   does not support the EC firmware image.\n"
 		" * Model detection with option --detect-model-only requires\n"
 		"   archive path -a,--archive\n"
 		" * The --quirks provides a set of options to override the\n"
@@ -136,6 +140,7 @@ static void print_help(int argc, char *argv[])
 		"    --force         \tForce update (skip checking contents)\n"
 		"    --output_dir=DIR\tSpecify the target for --mode=output\n"
 		"    --unlock_me     \t(deprecated) Unlock the Intel ME before flashing\n"
+		"    --signature_id=S\t(deprecated) Same as --model\n"
 		"\n"
 		"Debugging and testing options:\n"
 		"    --wp=1|0        \tSpecify write protection status\n"
@@ -143,7 +148,6 @@ static void print_help(int argc, char *argv[])
 		"    --model=MODEL   \tOverride system model for images\n"
 		"    --detect-model-only\tDetect model by reading the FRID and exit\n"
 		"    --gbb_flags=FLAG\tOverride new GBB flags\n"
-		"    --signature_id=S\tOverride signature ID for key files\n"
 		"    --sys_props=LIST\tList of system properties to override\n"
 		"-d, --debug         \tPrint debugging messages\n"
 		"-v, --verbose       \tPrint verbose messages\n"
@@ -158,6 +162,7 @@ static int do_update(int argc, char *argv[])
 	const char *prepare_ctrl_name = NULL;
 	char *servo_programmer = NULL;
 	char *endptr;
+	const char *sig = NULL;
 
 	struct updater_config *cfg = updater_new_config();
 	assert(cfg);
@@ -217,13 +222,21 @@ static int do_update(int argc, char *argv[])
 			args.output_dir = optarg;
 			break;
 		case OPT_MODEL:
+			if (sig) {
+				WARN("Ignore --model=%s because --signature_id=%s is already specified.\n", optarg, sig);
+			} else {
+				args.model = optarg;
+			}
+			break;
+		case OPT_SIGNATURE:
+			WARN("--signature_id is deprecated by --model. "
+			      "Please change to `--model=%s` in future.\n",
+			      optarg);
+			sig = optarg;
 			args.model = optarg;
 			break;
 		case OPT_DETECT_MODEL_ONLY:
 			args.detect_model_only = true;
-			break;
-		case OPT_SIGNATURE:
-			args.signature_id = optarg;
 			break;
 		case OPT_WRITE_PROTECTION:
 			args.write_protection = optarg;
@@ -233,6 +246,11 @@ static int do_update(int argc, char *argv[])
 			break;
 		case OPT_MANIFEST:
 			args.do_manifest = 1;
+			args.manifest_format = MANIFEST_PRINT_FORMAT_JSON;
+			break;
+		case OPT_PARSEABLE_MANIFEST:
+			args.do_manifest = 1;
+			args.manifest_format = MANIFEST_PRINT_FORMAT_PARSEABLE;
 			break;
 		case OPT_FACTORY:
 			args.is_factory = 1;

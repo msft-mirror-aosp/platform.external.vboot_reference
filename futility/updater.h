@@ -32,6 +32,7 @@ static const char * const FMAP_RO = "WP_RO",
 		  * const FMAP_RW_SHARED = "RW_SHARED",
 		  * const FMAP_RW_LEGACY = "RW_LEGACY",
 		  * const FMAP_RW_VPD = "RW_VPD",
+		  * const FMAP_RW_DIAG_NVRAM = "DIAG_NVRAM",
 		  * const FMAP_SI_DESC = "SI_DESC",
 		  * const FMAP_SI_ME = "SI_ME";
 
@@ -55,8 +56,7 @@ enum quirk_types {
 	QUIRK_CLEAR_MRC_DATA,
 	QUIRK_PRESERVE_ME,
 	/* Platform-specific quirks (removed after AUE) */
-	QUIRK_ALLOW_EMPTY_CUSTOM_LABEL_TAG,
-	QUIRK_OVERRIDE_SIGNATURE_ID,
+	QUIRK_OVERRIDE_CUSTOM_LABEL,
 	QUIRK_EVE_SMM_STORE,
 	QUIRK_UNLOCK_CSME_EVE,
 	QUIRK_UNLOCK_CSME,
@@ -101,17 +101,24 @@ struct updater_config {
 	uint32_t gbb_flags;
 	bool detect_model;
 	bool dut_is_remote;
+	bool output_only;
+};
+
+enum manifest_print_format {
+	MANIFEST_PRINT_FORMAT_JSON = 0,
+	MANIFEST_PRINT_FORMAT_PARSEABLE,
 };
 
 struct updater_config_arguments {
 	char *image, *ec_image;
 	char *archive, *quirks, *mode;
 	const char *programmer, *write_protection;
-	char *model, *signature_id;
+	char *model;
 	char *emulation, *sys_props;
 	char *output_dir;
 	char *repack, *unpack;
 	int is_factory, try_update, force_update, do_manifest, host_only;
+	enum manifest_print_format manifest_format;
 	int fast_update;
 	int verbosity;
 	int override_gbb_flags;
@@ -166,8 +173,7 @@ struct model_config {
 	char *name;
 	char *image, *ec_image;
 	struct patch_config patches;
-	char *signature_id;
-	int is_custom_label;
+	bool has_custom_label;
 };
 
 struct manifest {
@@ -175,7 +181,6 @@ struct manifest {
 	struct model_config *models;
 	struct u_archive *archive;
 	int default_model;
-	int has_keyset;
 };
 
 enum updater_error_codes {
@@ -267,12 +272,13 @@ const char * const updater_get_model_quirks(struct updater_config *cfg);
 char * updater_get_cbfs_quirks(struct updater_config *cfg);
 
 /*
- * Overrides signature id if the device was shipped with known
+ * Overrides the custom label config if the device was shipped with known
  * special rootkey.
  */
-int quirk_override_signature_id(struct updater_config *cfg,
-				struct model_config *model,
-				const char **signature_id);
+const struct model_config *quirk_override_custom_label(
+		struct updater_config *cfg,
+		const struct manifest *manifest,
+		const struct model_config *model);
 
 /* Functions from updater_archive.c */
 
@@ -341,6 +347,9 @@ void delete_manifest(struct manifest *manifest);
 /* Prints the information of objects in manifest (models and images) in JSON. */
 void print_json_manifest(const struct manifest *manifest);
 
+/* Prints the manifest in parseable double-colon-separated tokens format. */
+void print_parseable_manifest(const struct manifest *manifest);
+
 /*
  * Modifies a firmware image from patch information specified in model config.
  * Returns 0 on success, otherwise number of failures.
@@ -368,15 +377,14 @@ manifest_detect_model_from_frid(struct updater_config *cfg,
 				struct manifest *manifest);
 
 /*
- * Applies custom label information to an existing model configuration.
- * Collects signature ID information from either parameter signature_id or
- * image file (via VPD) and updates model.patches for key files.
- * Returns 0 on success, otherwise failure.
+ * Finds the custom label model config from the base model + system tag.
+ * The system tag came from the firmware VPD section.
+ * Returns the matched model_config, base if no applicable custom label data,
+ * or NULL for any critical error.
  */
-int model_apply_custom_label(
-		struct model_config *model,
-		struct u_archive *archive,
-		const char *signature_id,
-		const char *image);
+const struct model_config *manifest_find_custom_label_model(
+		struct updater_config *cfg,
+		const struct manifest *manifest,
+		const struct model_config *base_model);
 
 #endif  /* VBOOT_REFERENCE_FUTILITY_UPDATER_H_ */
