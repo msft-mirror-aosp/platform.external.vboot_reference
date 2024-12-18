@@ -17,8 +17,6 @@
 #include "updater.h"
 #include "util_misc.h"
 
-#define REMOVE_WP_URL "https://goo.gl/ces83U"
-
 static const char ROOTKEY_HASH_DEV[] =
 		"b11d74edd286c144e1135b49e7f0bc20cf041f10";
 
@@ -1247,7 +1245,7 @@ enum updater_error_codes update_firmware(struct updater_config *cfg)
 	/* Providing more hints for what to do on failure. */
 	if (r == UPDATE_ERR_ROOT_KEY && wp_enabled)
 		ERROR("To change keys in RO area, you must first remove "
-		      "write protection ( " REMOVE_WP_URL " ).\n");
+		      "write protection.\n");
 
 	return r;
 }
@@ -1475,7 +1473,7 @@ static int check_arg_compatibility(
 	 */
 	if (arg->detect_model_only) {
 		if (arg->do_manifest || arg->repack || arg->unpack) {
-			ERROR("--manifest/--repack/--unpack"
+			ERROR("--manifest/--parseable-manifest/--repack/--unpack"
 			      " is not compatible with --detect-model-only.\n");
 			return -1;
 		}
@@ -1486,7 +1484,7 @@ static int check_arg_compatibility(
 	} else if (arg->do_manifest) {
 		if (arg->repack || arg->unpack) {
 			ERROR("--repack/--unpack"
-			      " is not compatible with --manifest.\n");
+			      " is not compatible with --manifest/--parseable-manifest.\n");
 			return -1;
 		}
 		if (!arg->archive && !(arg->image || arg->ec_image)) {
@@ -1621,7 +1619,14 @@ static int print_manifest(const struct updater_config_arguments *arg)
 			.num = 1,
 			.models = &model,
 		};
-		print_json_manifest(&manifest);
+		if (arg->manifest_format == MANIFEST_PRINT_FORMAT_JSON) {
+			print_json_manifest(&manifest);
+		} else if (arg->manifest_format == MANIFEST_PRINT_FORMAT_PARSEABLE) {
+			print_parseable_manifest(&manifest);
+		} else {
+			ERROR("Unknown manifest format requested: %d", arg->manifest_format);
+			return 1;
+		}
 		return 0;
 	}
 
@@ -1636,6 +1641,11 @@ static int print_manifest(const struct updater_config_arguments *arg)
 		const char *manifest_name = "manifest.json";
 		uint8_t *data = NULL;
 		uint32_t size = 0;
+
+		if (arg->manifest_format != MANIFEST_PRINT_FORMAT_JSON) {
+			ERROR("Only manifest format supported in fast mode is JSON.\n");
+			return 1;
+		}
 
 		if (!archive_has_entry(archive, manifest_name) ||
 		    archive_read_file(archive, manifest_name, &data, &size,
@@ -1655,7 +1665,15 @@ static int print_manifest(const struct updater_config_arguments *arg)
 			      arg->archive);
 			return 1;
 		}
-		print_json_manifest(manifest);
+		if (arg->manifest_format == MANIFEST_PRINT_FORMAT_JSON) {
+			print_json_manifest(manifest);
+		} else if (arg->manifest_format == MANIFEST_PRINT_FORMAT_PARSEABLE) {
+			print_parseable_manifest(manifest);
+		} else {
+			ERROR("Unknown manifest format requested: %d", arg->manifest_format);
+			delete_manifest(manifest);
+			return 1;
+		}
 		delete_manifest(manifest);
 	}
 
@@ -1787,8 +1805,7 @@ int updater_setup_config(struct updater_config *cfg,
 	}
 	if (check_wp_disabled && is_ap_write_protection_enabled(cfg)) {
 		errorcnt++;
-		ERROR("Please remove write protection for factory mode \n"
-		      "( " REMOVE_WP_URL " ).");
+		ERROR("Please remove write protection for factory mode\n");
 	}
 
 	if (cfg->image.data) {
