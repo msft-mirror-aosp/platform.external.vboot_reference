@@ -613,8 +613,38 @@ struct vb2_kernel_params {
 	uint32_t bootloader_size;
 	/* UniquePartitionGuid for boot partition. */
 	uint8_t partition_guid[16];
-	/* Flags set by signer. */
+	/* Flags with kernel type. */
 	uint32_t flags;
+	/* Ramdisk address */
+	uint8_t *ramdisk;
+	/* Size of the ramdisk */
+	size_t ramdisk_size;
+	/* Bootconfig address */
+	void *bootconfig;
+	/* Size of the bootconfig */
+	size_t bootconfig_size;
+	/* Pointer to Android vendor command line buffer */
+	char *vendor_cmdline_buffer;
+	/* Address of the region with kernel cmdline parameters. */
+	char *vboot_cmdline_buffer;
+	/* Size of the region with kernel cmdline parameters. */
+	uint32_t vboot_cmdline_size;
+
+	/*
+	 * Destination buffer for pvmfw. Shall be ignored if pvmfw_buffer_size is 0.
+	 * This field can be overwritten by implementation and the caller needs
+	 * to respect the new value.
+	 */
+	void *pvmfw_buffer;
+	/*
+	 * Size of pvmfw buffer in bytes. If non-zero then implementation shall
+	 * try to load pvmfw to the pvmfw buffer. This field can be overwritten
+	 * by implementation and the caller needs to respect the new value.
+	 * If successful the pvmfw_out_size shall be set to the correct non-zero value.
+	 */
+	uint32_t pvmfw_buffer_size;
+	/* Size of pvmfw partition in bytes in pvmfw buffer. */
+	uint32_t pvmfw_out_size;
 };
 
 /*****************************************************************************/
@@ -1039,7 +1069,7 @@ bool vb2api_hwcrypto_allowed(struct vb2_context *ctx);
  * Implementation should reboot or halt the machine, or fall back to some
  * alternative boot flow.  Retrying vboot is unlikely to succeed.
  */
-void vb2ex_abort(void);
+void vb2ex_abort(void) __attribute__((noreturn));
 
 /**
  * Commit any pending data to disk.
