@@ -17,6 +17,8 @@ DEFINE_string image "" "The AP firmware file (e.g 'image-steelix.bin') to swap o
 DEFINE_string ec "" "The EC firmware file (e.g 'ec.bin')" e
 DEFINE_string ec_config "" "The EC config file (default is 'ec.config')"
 DEFINE_string ap_for_ec "" "The AP firmware file (e.g 'image-steelix.bin') as source of EC firmware file" a
+DEFINE_string raw_ecrw "" "The raw EC RW file (e.g. 'ec.RW.flat')" r
+DEFINE_string ec_ver "" "The EC version file (e.g. 'ec.version')" v
 
 # Parse command line.
 FLAGS "$@" || exit 1
@@ -69,20 +71,15 @@ cbfstool_try_remove() {
 
 extract_ecrw_files_from_ap() {
   local ecrw_file=$1
-  local ecrw_hash_file=$2
-  local ecrw_ver_file=$3
-  local ecrw_config_file=$4
-  local ap_for_ec_file=$5
+  local ecrw_ver_file=$2
+  local ecrw_config_file=$3
+  local ap_for_ec_file=$4
 
   local region="${FMAP_REGIONS[0]}"
 
   cbfstool "${ap_for_ec_file}" extract -r "${region}" -n "${CBFS_ECRW_NAME}" \
     -f "${ecrw_file}"
   info "EC RW extracted to ${ecrw_file}"
-
-  cbfstool "${ap_for_ec_file}" extract -r "${region}" \
-    -n "${CBFS_ECRW_HASH_NAME}" -f "${ecrw_hash_file}"
-  info "EC RW hash extracted to ${ecrw_hash_file}"
 
   cbfstool_try_extract "${ap_for_ec_file}" "${region}" \
     "${CBFS_ECRW_VERSION_NAME}" "${ecrw_ver_file}" \
@@ -93,20 +90,75 @@ extract_ecrw_files_from_ap() {
     || warn "${CBFS_ECRW_CONFIG_NAME} not found in source AP file."
 }
 
+# Dump the 32-bit hex string from the given offset in the given EC-RW file.
+read_hex32() {
+  local ecrw_file=$1
+  local offset=$2
+
+  hexdump -n 4 -s "${offset}" -e '1/4 "%08x"' "${ecrw_file}" 2>/dev/null
+}
+
+truncate_ec_rw() {
+  local ecrw_file=$1
+  local offset=0
+  local max_offset=4096
+
+  # The image_data is defined in src/platform/ec/include/cros_version.h:
+  #   struct image_data {
+  #     uint32_t cookie1;
+  #     char version[32];
+  #     uint32_t size;
+  #     int32_t rollback_version;
+  #     uint32_t cookie2;
+  #     ...
+  #   } __packed;
+  readonly COOKIE1_SIGNATURE="ce778899"
+  readonly COOKIE2_SIGNATURE="ceaabbdd"
+  readonly COOKIE2_OFFSET=44
+  readonly SIZE_OFFSET=36
+
+  # Search for the cookies of the image_data header
+  while true; do
+    if [[ "${offset}" -gt "${max_offset}" ]]; then
+      die "No image_data's cookies found within ${max_offset} bytes."
+    fi
+
+    cookie1="$(read_hex32 "${ecrw_file}" "${offset}")"
+    if [[ "${cookie1}" == "${COOKIE1_SIGNATURE}" ]]; then
+      local cookie2_offset=$((offset + COOKIE2_OFFSET))
+      cookie2="$(read_hex32 "${ecrw_file}" "${cookie2_offset}")"
+      if [[ "${cookie2}" == "${COOKIE2_SIGNATURE}" ]]; then
+        break
+      fi
+    fi
+    offset=$((offset + 4))
+  done
+
+  # Retrieve image_data.size
+  local size_hex
+  size_hex="$(read_hex32 "${ecrw_file}" $((offset + SIZE_OFFSET)))"
+  local size_dec
+  size_dec=$((0x${size_hex}))
+  if [[ "$size_dec" -eq 0 ]]; then
+    die "Invalid image size: 0x${size_hex} (${size_dec})."
+  fi
+
+  info "Found cookies at ${offset}. Image size: 0x${size_hex} (${size_dec})."
+  truncate -s "${size_dec}" "${ecrw_file}"
+  info "File ${ecrw_file} truncated to ${size_dec} bytes."
+}
+
 extract_ecrw_files_from_ec() {
   local ecrw_file=$1
-  local ecrw_hash_file=$2
-  local ecrw_ver_file=$3
-  local ec_file=$4
+  local ecrw_ver_file=$2
+  local ec_file=$3
 
-  if ! futility dump_fmap -x "${ec_file}" "RW_FW:${ecrw_file}" >/dev/null ; then
-    info "Falling back to EC_RW section"
+  if ! futility dump_fmap -x "${ec_file}" "RW_FW:${ecrw_file}" >/dev/null 2>&1 ; then
+    info "Falling back to EC_RW section for legacy EC."
     futility dump_fmap -x "${ec_file}" "EC_RW:${ecrw_file}" >/dev/null
+    truncate_ec_rw "${ecrw_file}"
   fi
   info "EC RW extracted to ${ecrw_file}"
-
-  openssl dgst -sha256 -binary "${ecrw_file}" > "${ecrw_hash_file}"
-  info "EC RW hash saved to ${ecrw_hash_file}"
 
   futility dump_fmap -x "${ec_file}" "RW_FWID:${ecrw_ver_file}" >/dev/null
 }
@@ -116,6 +168,8 @@ swap_ecrw() {
   local ec_file=$2
   local ec_config_file=$3
   local ap_for_ec_file=$4
+  local raw_ecrw=$5
+  local ec_ver=$6
 
   local temp_dir
   local ecrw_file
@@ -140,20 +194,24 @@ swap_ecrw() {
   if [[ -n "${ec_file}" ]]; then
     extract_ecrw_files_from_ec \
       "${ecrw_file}" \
-      "${ecrw_hash_file}" \
       "${ecrw_ver_file}" \
       "${ec_file}"
     if [[ -n "${ec_config_file}" ]]; then
       ecrw_config_file="${ec_config_file}"
     fi
-  else
+  elif [[ -n "${ap_for_ec_file}" ]]; then
     extract_ecrw_files_from_ap \
       "${ecrw_file}" \
-      "${ecrw_hash_file}" \
       "${ecrw_ver_file}" \
       "${ecrw_config_file}" \
       "${ap_for_ec_file}"
+  else
+    ecrw_file="${raw_ecrw}"
+    ecrw_ver_file="${ec_ver}"
   fi
+
+  openssl dgst -sha256 -binary "${ecrw_file}" > "${ecrw_hash_file}"
+  info "EC RW hash is recalculated and saved to ${ecrw_hash_file}"
 
   for region in "${FMAP_REGIONS[@]}"
   do
@@ -220,13 +278,13 @@ main() {
     die "-i or --image are required."
   fi
 
-  if [[ -z "${FLAGS_ec}" ]] && [[ -z "${FLAGS_ap_for_ec}" ]]; then
+  has_ec=$([[ -n "${FLAGS_ec}" ]] && echo 1 || echo 0)
+  has_ap_for_ec=$([[ -n "${FLAGS_ap_for_ec}" ]] && echo 1 || echo 0)
+  has_raw_ecrw=$([[ -n "${FLAGS_raw_ecrw}" ]] && echo 1 || echo 0)
+
+  if [[ $((has_ec + has_ap_for_ec + has_raw_ecrw)) -ne 1 ]]; then
     flags_help
-    die "-e/--ec or -a/--ap_for_ec are required."
-  fi
-  if [[ -n "${FLAGS_ec}" ]] && [[ -n "${FLAGS_ap_for_ec}" ]]; then
-    flags_help
-    die "-e/--ec conflicts with -a/--ap_for_ec."
+    die "Exactly one of -e/--ec, -a/--ap_for_ec, or -r/--raw_ecrw is required."
   fi
 
   if [[ -n "${FLAGS_ec}" ]] &&
@@ -239,8 +297,17 @@ main() {
      [[ -n "${FLAGS_ec_config}" ]]; then
     die "-a/--ap_for_ec conflicts with --ec_config."
   fi
+  if [[ -n "${FLAGS_ec}" ]] &&
+     [[ -n "${FLAGS_ec_ver}" ]]; then
+    die "-e/--ec conflicts with --ec_ver."
+  fi
+  if [[ -n "${FLAGS_ap_for_ec}" ]] &&
+     [[ -n "${FLAGS_ec_ver}" ]]; then
+    die "-a/--ap_for_ec conflicts with --ec_ver."
+  fi
 
-  swap_ecrw "${FLAGS_image}" "${FLAGS_ec}" "${FLAGS_ec_config}" "${FLAGS_ap_for_ec}"
+  swap_ecrw "${FLAGS_image}" "${FLAGS_ec}" "${FLAGS_ec_config}" "${FLAGS_ap_for_ec}" \
+      "${FLAGS_raw_ecrw}" "${FLAGS_ec_ver}"
 }
 
 main "$@"
