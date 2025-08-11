@@ -47,7 +47,7 @@ static void print_dut_properties(struct updater_config *cfg)
 
 	printf("System properties: [");
 	for (i = 0; i < DUT_PROP_MAX; i++) {
-		printf("%d,",
+		printf("%" PRId64 ",",
 		       dut_get_property((enum dut_property_type)i, cfg));
 	}
 	printf("]\n");
@@ -59,7 +59,8 @@ static void print_dut_properties(struct updater_config *cfg)
  * the given value.
  */
 static void override_dut_property(enum dut_property_type property_type,
-				  struct updater_config *cfg, int value)
+				  struct updater_config *cfg,
+				  dut_property_t value)
 {
 	struct dut_property *prop;
 
@@ -85,6 +86,8 @@ static void override_properties_with_default(struct updater_config *cfg)
 	override_dut_property(DUT_PROP_WP_HW, cfg, 0);
 	override_dut_property(DUT_PROP_WP_SW_AP, cfg, 0);
 	override_dut_property(DUT_PROP_WP_SW_EC, cfg, 0);
+	/* 0xFFFFFFFF is the unknown SKU ID. */
+	override_dut_property(DUT_PROP_SKU_ID, cfg, 0xFFFFFFFF);
 }
 
 /*
@@ -243,7 +246,7 @@ static const char *decide_rw_target(struct updater_config *cfg,
 				    enum target_type target)
 {
 	const char *a = FMAP_RW_SECTION_A, *b = FMAP_RW_SECTION_B;
-	int slot = dut_get_property(DUT_PROP_MAINFW_ACT, cfg);
+	dut_property_t slot = dut_get_property(DUT_PROP_MAINFW_ACT, cfg);
 
 	switch (slot) {
 	case SLOT_A:
@@ -574,25 +577,28 @@ static bool is_unlock_csme_requested(struct updater_config *cfg)
 
 /*
  * Checks if the given firmware images are compatible with current platform.
- * In current implementation (following Chrome OS style), we assume the platform
- * is identical to the name before a dot (.) in firmware version.
+ * In current implementation, we check the model name extracted from FRID.
+ *
  * Returns 0 for success, otherwise failure.
  */
 static int check_compatible_platform(struct updater_config *cfg)
 {
-	int len;
+	int res = -1;
 	struct firmware_image *image_from = &cfg->image_current,
 			      *image_to = &cfg->image;
-	const char *from_dot = strchr(image_from->ro_version, '.'),
-	           *to_dot = strchr(image_to->ro_version, '.');
+	char *name_from = get_model_from_frid(image_from->ro_version);
+	char *name_to = get_model_from_frid(image_to->ro_version);
 
-	if (!from_dot || !to_dot) {
-		VB2_DEBUG("Missing dot (from=%p, to=%p)\n", from_dot, to_dot);
-		return -1;
-	}
-	len = from_dot - image_from->ro_version + 1;
-	VB2_DEBUG("Platform: %*.*s\n", len, len, image_from->ro_version);
-	return strncasecmp(image_from->ro_version, image_to->ro_version, len);
+	if (!name_from || !name_to)
+		goto exit;
+
+	VB2_DEBUG("Platform: %s\n", name_from);
+	res = strcasecmp(name_from, name_to);
+
+exit:
+	free(name_from);
+	free(name_to);
+	return res;
 }
 
 const struct vb2_packed_key *get_rootkey(
@@ -815,7 +821,7 @@ static int do_check_compatible_tpm_keys(struct updater_config *cfg,
 {
 	unsigned int data_key_version = 0, firmware_version = 0,
 		     tpm_data_key_version = 0, tpm_firmware_version = 0;
-	int tpm_fwver = 0;
+	dut_property_t tpm_fwver;
 
 	/* Fail if the given image does not look good. */
 	if (get_key_versions(rw_image, FMAP_RW_VBLOCK_A, &data_key_version,
@@ -824,18 +830,18 @@ static int do_check_compatible_tpm_keys(struct updater_config *cfg,
 
 	/* The stored tpm_fwver can be 0 (b/116298359#comment3). */
 	tpm_fwver = dut_get_property(DUT_PROP_TPM_FWVER, cfg);
-	if (tpm_fwver < 0) {
+	if (tpm_fwver < 0 || (uint64_t)tpm_fwver > UINT32_MAX) {
 		/*
 		 * tpm_fwver is commonly misreported in --ccd mode, so allow
 		 * force_update to ignore the reported value.
 		 */
 		if (!cfg->force_update)
-			ERROR("Invalid tpm_fwver: %d.\n", tpm_fwver);
+			ERROR("Invalid tpm_fwver: %" PRId64 ".\n", tpm_fwver);
 		return -1;
 	}
 
-	tpm_data_key_version = tpm_fwver >> 16;
-	tpm_firmware_version = tpm_fwver & 0xffff;
+	tpm_data_key_version = (uint32_t)tpm_fwver >> 16;
+	tpm_firmware_version = (uint32_t)tpm_fwver & 0xffff;
 	VB2_DEBUG("TPM: data_key_version = %d, firmware_version = %d\n",
 		  tpm_data_key_version, tpm_firmware_version);
 
