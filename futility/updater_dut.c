@@ -72,7 +72,7 @@ int dut_get_property_int(const char *key, struct updater_config *cfg)
 }
 
 /* An helper function to return "mainfw_act" system property.  */
-static int dut_get_mainfw_act(struct updater_config *cfg)
+static dut_property_t dut_get_mainfw_act(struct updater_config *cfg)
 {
 	char buf[VB_MAX_STRING_PROPERTY];
 
@@ -88,19 +88,19 @@ static int dut_get_mainfw_act(struct updater_config *cfg)
 }
 
 /* A helper function to return the "tpm_fwver" system property. */
-static int dut_get_tpm_fwver(struct updater_config *cfg)
+static dut_property_t dut_get_tpm_fwver(struct updater_config *cfg)
 {
 	return dut_get_property_int("tpm_fwver", cfg);
 }
 
 /* A helper function to return the "hardware write protection" status. */
-static int dut_get_wp_hw(struct updater_config *cfg)
+static dut_property_t dut_get_wp_hw(struct updater_config *cfg)
 {
 	/* wpsw refers to write protection 'switch', not 'software'. */
 	return dut_get_property_int("wpsw_cur", cfg);
 }
 
-static int dut_get_platform_version(struct updater_config *cfg)
+static dut_property_t dut_get_platform_version(struct updater_config *cfg)
 {
 	long rev = dut_get_property_int("board_id", cfg);
 	/* Assume platform version = 0 on error. */
@@ -125,21 +125,36 @@ static int dut_get_wp_sw(const char *programmer)
 }
 
 /* Helper function to return host AP software write protection status. */
-static inline int dut_get_wp_sw_ap(struct updater_config *cfg)
+static inline dut_property_t dut_get_wp_sw_ap(struct updater_config *cfg)
 {
 	return dut_get_wp_sw(cfg->image.programmer);
 }
 
 /* Helper function to return host EC software write protection status. */
-static inline int dut_get_wp_sw_ec(struct updater_config *cfg)
+static inline dut_property_t dut_get_wp_sw_ec(struct updater_config *cfg)
 {
 	return dut_get_wp_sw(cfg->ec_image.programmer);
 }
 
+static dut_property_t dut_get_sku_id(struct updater_config *cfg)
+{
+	uint32_t sku_id;
+
+	if (cfg->dut_is_remote) {
+		WARN("Ignored getting SKU ID a remote DUT.\n");
+		return -1;
+	}
+
+	if (VbGetSystemSkuId(&sku_id))
+		return -1;
+
+	return (dut_property_t)sku_id;
+}
+
 /* Helper functions to use or configure the DUT properties. */
 
-int dut_get_property(enum dut_property_type property_type,
-		     struct updater_config *cfg)
+dut_property_t dut_get_property(enum dut_property_type property_type,
+				struct updater_config *cfg)
 {
 	struct dut_property *prop;
 
@@ -162,4 +177,5 @@ void dut_init_properties(struct dut_property *props, int num)
 	props[DUT_PROP_WP_HW].getter = dut_get_wp_hw;
 	props[DUT_PROP_WP_SW_AP].getter = dut_get_wp_sw_ap;
 	props[DUT_PROP_WP_SW_EC].getter = dut_get_wp_sw_ec;
+	props[DUT_PROP_SKU_ID].getter = dut_get_sku_id;
 }

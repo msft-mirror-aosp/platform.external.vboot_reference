@@ -174,6 +174,19 @@ void strip_string(char *s, const char *pattern);
 int save_file_from_stdin(const char *output);
 
 /*
+ * Loads FRID from system firmware.
+ * The caller is responsible for freeing the returned string.
+ */
+char *load_system_frid(struct updater_config *cfg);
+
+/*
+ * Extracts the model name from FRID. For example, if FRID is
+ * "Google_Geralt.15635.0.0", then "Google_Geralt" will be returned.
+ * The caller is responsible for freeing the returned string.
+ */
+char *get_model_from_frid(const char *frid);
+
+/*
  * Returns true if the AP write protection is enabled on current system.
  */
 bool is_ap_write_protection_enabled(struct updater_config *cfg);
@@ -211,9 +224,11 @@ void prepare_servo_control(const char *control_name, bool on);
 
 /* DUT related functions (implementations in updater_dut.c) */
 
+typedef int64_t dut_property_t;
+
 struct dut_property {
-	int (*getter)(struct updater_config *cfg);
-	int value;
+	dut_property_t (*getter)(struct updater_config *cfg);
+	dut_property_t value;
 	int initialized;
 };
 
@@ -224,15 +239,16 @@ enum dut_property_type {
 	DUT_PROP_WP_HW,
 	DUT_PROP_WP_SW_AP,
 	DUT_PROP_WP_SW_EC,
-	DUT_PROP_MAX
+	DUT_PROP_SKU_ID,
+	DUT_PROP_MAX,
 };
 
 /* Helper function to initialize DUT properties. */
 void dut_init_properties(struct dut_property *props, int num);
 
 /* Gets the DUT system property by given type. Returns the property value. */
-int dut_get_property(enum dut_property_type property_type,
-		     struct updater_config *cfg);
+dut_property_t dut_get_property(enum dut_property_type property_type,
+				struct updater_config *cfg);
 
 int dut_set_property_string(const char *key, const char *value,
 			    struct updater_config *cfg);
