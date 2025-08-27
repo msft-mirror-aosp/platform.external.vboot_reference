@@ -322,38 +322,6 @@ update_rootfs_hash() {
   done
 }
 
-# Update the SSD install-able vblock file on stateful partition.
-# ARGS: Loopdev
-# This is deprecated because all new images should have a SSD boot-able kernel
-# in partition 4. However, the signer needs to be able to sign new & old images
-# (crbug.com/449450#c13) so we will probably never remove this.
-update_stateful_partition_vblock() {
-  local loopdev="$1"
-  local temp_out_vb
-  temp_out_vb="$(make_temp_file)"
-
-  local loop_kern="${loopdev}p4"
-  if [[ -z "$(sudo_futility dump_kernel_config "${loop_kern}" \
-        2>/dev/null)" ]]; then
-    info "Building vmlinuz_hd.vblock from legacy image partition 2."
-    loop_kern="${loopdev}p2"
-  fi
-
-  # vblock should always use kernel keyblock.
-  sudo_futility vbutil_kernel --repack "${temp_out_vb}" \
-    --keyblock "${KEYCFG_KERNEL_KEYBLOCK}" \
-    --signprivate "${KEYCFG_KERNEL_VBPRIVK}" \
-    --oldblob "${loop_kern}" \
-    --vblockonly
-
-  # Copy the installer vblock to the stateful partition.
-  local stateful_dir
-  stateful_dir=$(make_temp_dir)
-  sudo mount "${loopdev}p1" "${stateful_dir}"
-  sudo cp "${temp_out_vb}" "${stateful_dir}"/vmlinuz_hd.vblock
-  sudo umount "${stateful_dir}"
-}
-
 # Do a validity check on the image's rootfs
 # ARGS: Image
 verify_image_rootfs() {
@@ -1015,7 +983,7 @@ update_recovery_kernel_hash() {
     dump_kernel_config "${loop_recovery_kernel}")"
   local old_kernb_hash
   old_kernb_hash="$(echo "${old_kernel_config}" |
-    sed -nEe "s#.*kern_b_hash=([a-z0-9]*).*#\1#p")"
+    sed -nEe 's#.*kern_b_hash=([a-z0-9]*).*#\1#p')"
   local new_kernb_hash
   if [[ "${#old_kernb_hash}" -lt 64 ]]; then
     new_kernb_hash=$(sudo sha1sum "${loop_kernb}" | cut -f1 -d' ')
@@ -1023,13 +991,68 @@ update_recovery_kernel_hash() {
     new_kernb_hash=$(sudo sha256sum "${loop_kernb}" | cut -f1 -d' ')
   fi
 
-  new_kernel_config=$(make_temp_file)
-  # shellcheck disable=SC2001
-  echo "${old_kernel_config}" |
-    sed -e "s#\(kern_b_hash=\)[a-z0-9]*#\1${new_kernb_hash}#" \
-      > "${new_kernel_config}"
+  local new_config_file
+  new_config_file="$(make_temp_file)"
+
+  # Set the new kernel config to be the same as the old one.
+  echo "${old_kernel_config}" > "${new_config_file}"
+
+  # Only use `new_config_file` from now on.
+
+  # Update the kernel B hash in the recovery kernel command line.
+  sed -i -e 's#\(kern_b_hash=\)[a-z0-9]*#\1'"${new_kernb_hash}#" \
+    "${new_config_file}"
+
+  # Update the `cros_part_hash` in the recovery kernel command line.
+  if echo "${old_kernel_config}" | grep -q "cros_part_hash="; then
+    info "Update the cros_part_hash in the kernel command line."
+
+    local old_cros_part_hash
+    old_cros_part_hash="$(echo "${old_kernel_config}" |
+      sed -nEe 's#.*cros_part_hash=([A-Za-z0-9+/,:=]*).*#\1#p')"
+
+    info "The old cros_part_hash is: ${old_cros_part_hash}"
+
+    # Extract partition numbers from the old_cros_part_hash.
+    # The old_cros_part_hash is a comma-separated string of
+    # `part_num:base64(hextobin(digest))`.
+    local old_cros_part_hash_list=()
+    local part_nums=()
+    IFS=',' read -r -a old_cros_part_hash_list <<< "${old_cros_part_hash}"
+
+    local old_cros_part_hash_pair
+    local part_num
+    for old_cros_part_hash_pair in "${old_cros_part_hash_list[@]}"; do
+      part_num="$(echo "${old_cros_part_hash_pair}" | cut -d':' -f1)"
+      [[ -n "${part_num}" ]] && part_nums+=("${part_num}")
+    done
+
+    # We generate the digest for each partition in `part_nums` and join them
+    # with `part_num:base64(hextobin(digest))` format that is comma separated.
+    local cros_part_hashes=()
+    local part_num
+    for part_num in "${part_nums[@]}"; do
+      local cros_part_hash
+      cros_part_hash="$(sudo sha256sum "${loopdev}p${part_num}" | cut -f1 -d' ')"
+      # Convert to binary then base64 format.
+      cros_part_hash="$(echo "${cros_part_hash}" | xxd -r -p | base64 -w0)"
+
+      info "The cros_part_hash for ${part_num} is: ${cros_part_hash}"
+      cros_part_hashes+=("${part_num}:${cros_part_hash}")
+    done
+
+    local new_cros_part_hash
+    new_cros_part_hash="$(IFS=','; echo "${cros_part_hashes[*]}")"
+
+    info "The new cros_part_hash is: ${new_cros_part_hash}"
+
+    # shellcheck disable=SC2001
+    sed -i -E 's#(cros_part_hash=)[A-Za-z0-9+/,:=]*#\1'"${new_cros_part_hash}#" \
+      "${new_config_file}"
+  fi
+
   info "New config for kernel partition ${recovery_kernel_partition} is"
-  cat "${new_kernel_config}"
+  cat "${new_config_file}"
 
   # Re-calculate kernel partition signature and command line.
   sudo_futility vbutil_kernel --repack "${loop_recovery_kernel}" \
@@ -1037,7 +1060,7 @@ update_recovery_kernel_hash() {
     --signprivate "${privkey}" \
     --version "${KERNEL_VERSION}" \
     --oldblob "${loop_recovery_kernel}" \
-    --config "${new_kernel_config}"
+    --config "${new_config_file}"
 }
 
 # Resign a single miniOS kernel partition.
@@ -1271,16 +1294,6 @@ sign_image_file() {
     "${kernA_keyblock}" "${kernA_privkey}" \
     "${kernB_keyblock}" "${kernB_privkey}" "${should_sign_kernB}" \
     "${kernC_keyblock}" "${kernC_privkey}" "${should_sign_kernC}"
-  update_stateful_partition_vblock "${loopdev}"
-  if [[ "${image_type}" == "recovery" &&
-        "${sign_recovery_like_base}" == "false" ]]; then
-    update_recovery_kernel_hash "${loopdev}" 2 "${kernA_keyblock}" \
-      "${kernA_privkey}"
-    if [[ "${should_sign_kernC}" == "true" ]]; then
-      update_recovery_kernel_hash "${loopdev}" 6 "${kernC_keyblock}" \
-        "${kernC_privkey}"
-    fi
-  fi
 
   if [[ -n "${minios_keyblock}" ]]; then
     # b/266502803: If it's a recovery image and minios_kernel.v1.keyblock
@@ -1295,6 +1308,16 @@ sign_image_file() {
     if ! resign_minios_kernels "${loopdev}" "${miniosA_keyblock}" \
         "${miniosB_keyblock}" "${minios_privkey}"; then
       return 1
+    fi
+  fi
+
+  if [[ "${image_type}" == "recovery" &&
+        "${sign_recovery_like_base}" == "false" ]]; then
+    update_recovery_kernel_hash "${loopdev}" 2 "${kernA_keyblock}" \
+      "${kernA_privkey}"
+    if [[ "${should_sign_kernC}" == "true" ]]; then
+      update_recovery_kernel_hash "${loopdev}" 6 "${kernC_keyblock}" \
+        "${kernC_privkey}"
     fi
   fi
 
