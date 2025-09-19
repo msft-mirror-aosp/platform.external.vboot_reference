@@ -178,6 +178,7 @@ cc_library_static {
     defaults: ["libvboot_defaults"],
     host_supported: true,
     vendor_available: true,
+    recovery_available: true,
 
     srcs: [
         ":cgpt_common",
@@ -413,6 +414,7 @@ cc_binary {
     defaults: ["vboot_defaults"],
     host_supported: true,
     vendor: true,
+    recovery_available: true,
 
     srcs: [":futility_srcs"],
     generated_sources: ["futility_cmds"],
