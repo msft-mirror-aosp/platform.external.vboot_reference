@@ -10,12 +10,12 @@ third_party {
   last_upgrade_date {
     year: 2025
     month: 8
-    day: 11
+    day: 27
   }
   identifier {
     type: "Git"
     value: "https://chromium.googlesource.com/chromiumos/platform/vboot_reference"
-    version: "26130316a50bfeaaedd8b3fda37b144f3eafd423"
+    version: "05353d26e82646c7826958683e7fb48bb1fb5dd8"
     primary_source: true
   }
 }
