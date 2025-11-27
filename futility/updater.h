@@ -101,6 +101,7 @@ struct updater_config {
 	uint32_t gbb_flags;
 	bool dut_is_remote;
 	bool output_only;
+	bool check_fwid;
 };
 
 enum manifest_print_format {
@@ -113,6 +114,9 @@ struct updater_config_arguments {
 	char *archive, *quirks, *mode;
 	const char *programmer, *write_protection;
 	char *model;
+	char *frid; /* FRID without version, e.g. "Google_Hylia". */
+	bool override_sku_id;
+	uint32_t sku_id;
 	char *emulation, *sys_props;
 	char *output_dir;
 	char *repack, *unpack;
@@ -126,6 +130,7 @@ struct updater_config_arguments {
 	uint32_t gbb_flags;
 	bool detect_model_only;
 	bool unlock_me;
+	bool check_fwid;
 };
 
 /*
@@ -195,6 +200,7 @@ enum updater_error_codes {
 	UPDATE_ERR_ROOT_KEY,
 	UPDATE_ERR_TPM_ROLLBACK,
 	UPDATE_ERR_UNLOCK_CSME,
+	UPDATE_ERR_FWID_CHECK,
 	UPDATE_ERR_UNKNOWN,
 };
 
@@ -364,7 +370,8 @@ int patch_image_by_model(
  */
 const struct model_config *manifest_find_model(struct updater_config *cfg,
 					       const struct manifest *manifest,
-					       const char *model_name);
+					       const char *model_name,
+					       const char *frid);
 
 /*
  * Finds the first existing model_config from manifest that matches current

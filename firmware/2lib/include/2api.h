@@ -606,14 +606,12 @@ struct vb2_kernel_params {
 	 */
 	/* Handle of disk containing loaded kernel. */
 	vb2ex_disk_handle_t disk_handle;
-	/* Partition number on disk to boot (1...M). */
-	uint32_t partition_number;
 	/* Offset of bootloader image from `kernel_buffer` address. */
 	uint64_t bootloader_offset;
 	/* Size of bootloader image in bytes. */
 	uint32_t bootloader_size;
 	/* UniquePartitionGuid for boot partition. */
-	uint8_t partition_guid[16];
+	Guid partition_guid;
 	/* Flags with kernel type. */
 	uint32_t flags;
 	/* Ramdisk address */
@@ -625,11 +623,11 @@ struct vb2_kernel_params {
 	/* Size of the bootconfig */
 	size_t bootconfig_size;
 	/* Pointer to Android vendor command line buffer */
-	char *vendor_cmdline_buffer;
-	/* Address of the region with kernel cmdline parameters. */
-	char *vboot_cmdline_buffer;
-	/* Size of the region with kernel cmdline parameters. */
-	uint32_t vboot_cmdline_size;
+	char *real_cmdline_ptr;
+	/* Address of the region with bootconfig parameters. */
+	char *bootconfig_cmdline_buffer;
+	/* Size of the region with bootconfig parameters. */
+	uint32_t bootconfig_cmdline_size;
 
 	/*
 	 * Destination buffer for pvmfw. Shall be ignored if pvmfw_buffer_size is 0.
@@ -646,6 +644,10 @@ struct vb2_kernel_params {
 	uint32_t pvmfw_buffer_size;
 	/* Size of pvmfw partition in bytes in pvmfw buffer. */
 	uint32_t pvmfw_out_size;
+
+	/* dtbo address & size */
+	void *dtbo;
+	size_t dtbo_size;
 };
 
 /*****************************************************************************/
@@ -739,47 +741,6 @@ vb2_error_t vb2api_load_minios_kernel(struct vb2_context *ctx,
 				      struct vb2_kernel_params *params,
 				      struct vb2_disk_info *disk_info,
 				      uint32_t minios_flags);
-
-/**
- * Load the verified boot block (vblock) for a kernel.
- *
- * This function may be called multiple times, to load and verify the
- * vblocks from multiple kernel partitions.
- *
- * @param ctx		Vboot context
- * @param stream	Kernel stream
- * @return VB2_SUCCESS, or error code on error.
- */
-vb2_error_t vb2api_load_kernel_vblock(struct vb2_context *ctx);
-
-/**
- * Get the size and offset of the kernel data for the most recent vblock.
- *
- * Valid after a successful call to vb2api_load_kernel_vblock().
- *
- * @param ctx		Vboot context
- * @param offset_ptr	Destination for offset in bytes of kernel data as
- *			reported by vblock.
- * @param size_ptr      Destination for size of kernel data in bytes.
- * @return VB2_SUCCESS, or error code on error.
- */
-vb2_error_t vb2api_get_kernel_size(struct vb2_context *ctx,
-				   uint32_t *offset_ptr, uint32_t *size_ptr);
-
-/**
- * Verify kernel data using the previously loaded kernel vblock.
- *
- * Valid after a successful call to vb2api_load_kernel_vblock().  This allows
- * the caller to load or map the kernel data, as appropriate, and pass the
- * pointer to the kernel data into vboot.
- *
- * @param ctx		Vboot context
- * @param buf		Pointer to kernel data
- * @param size		Size of kernel data in bytes
- * @return VB2_SUCCESS, or error code on error.
- */
-vb2_error_t vb2api_verify_kernel_data(struct vb2_context *ctx, const void *buf,
-				      uint32_t size);
 
 /**
  * Clean up after kernel verification.
@@ -1087,7 +1048,7 @@ void vb2ex_abort(void) __attribute__((noreturn));
  */
 vb2_error_t vb2ex_commit_data(struct vb2_context *ctx);
 
-/* Boot modes that vb2ex_get_android_bootmode can return */
+/* Boot modes that vb2ex_handle_android_misc_partition can return */
 enum vb2_android_bootmode {
 	/* Boot android normally */
 	VB2_ANDROID_NORMAL_BOOT = 0,
@@ -1107,10 +1068,10 @@ enum vb2_android_bootmode {
  * @param bootmode	Return requested boot mode for Android
  * @return VB2_SUCCESS, or non-zero error code.
  */
-vb2_error_t vb2ex_get_android_bootmode(struct vb2_context *ctx,
-				       vb2ex_disk_handle_t disk,
-				       GptData *gpt,
-				       enum vb2_android_bootmode *bootmode);
+vb2_error_t vb2ex_handle_android_misc_partition(struct vb2_context *ctx,
+						vb2ex_disk_handle_t disk,
+						GptData *gpt,
+						enum vb2_android_bootmode *bootmode);
 
 /*****************************************************************************/
 /* TPM functionality */

@@ -9,13 +9,13 @@ third_party {
   license_note: "would be NOTICE save for scripts/image_signing/lib/shflags/shflags"
   last_upgrade_date {
     year: 2025
-    month: 8
+    month: 11
     day: 27
   }
   identifier {
     type: "Git"
     value: "https://chromium.googlesource.com/chromiumos/platform/vboot_reference"
-    version: "05353d26e82646c7826958683e7fb48bb1fb5dd8"
+    version: "67fb9d2b799af11f2c21ed1af2f7298f52948295"
     primary_source: true
   }
 }

@@ -940,6 +940,7 @@ const char * const updater_error_messages[] = {
 			        "(different from RO).",
 	[UPDATE_ERR_TPM_ROLLBACK] = "RW not usable due to TPM anti-rollback.",
 	[UPDATE_ERR_UNLOCK_CSME] = "The CSME was already locked (b/284913015).",
+	[UPDATE_ERR_FWID_CHECK] = "Cannot complete FWID check.",
 	[UPDATE_ERR_UNKNOWN] = "Unknown error.",
 };
 
@@ -1000,7 +1001,8 @@ static enum updater_error_codes update_try_rw_firmware(
 		      target, image_to->file_name);
 		return UPDATE_ERR_INVALID_IMAGE;
 	}
-	if (!(cfg->force_update || cfg->try_update == TRY_UPDATE_DEFERRED_HOLD))
+	if (!(cfg->force_update || cfg->try_update == TRY_UPDATE_DEFERRED_HOLD
+			|| cfg->check_fwid))
 		has_update = section_needs_update(image_from, image_to, target);
 
 	if (has_update) {
@@ -1187,6 +1189,24 @@ enum updater_error_codes update_firmware(struct updater_config *cfg)
 	       image_to->rw_version_b, image_to->ecrw_version_b);
 	check_firmware_versions(image_to);
 
+	bool wp_enabled = is_ap_write_protection_enabled(cfg);
+
+	/* Check if new firmware version is newer */
+	if (cfg->check_fwid) {
+		enum check_fwid_return_value ret =
+			check_if_update_needed_with_fwid(cfg, wp_enabled);
+		if (ret == FWID_CHECK_ERR) {
+			ERROR("Error processing FWID.\n");
+			return UPDATE_ERR_FWID_CHECK;
+		}
+
+		if (ret == FWID_CHECK_UPDATE_SKIPPED) {
+			INFO("Firmware version up to date.\n");
+			if (!cfg->force_update)
+				return UPDATE_ERR_DONE;
+		}
+	}
+
 	try_apply_quirk(QUIRK_NO_VERIFY, cfg);
 	if (try_apply_quirk(QUIRK_MIN_PLATFORM_VERSION, cfg)) {
 		if (!cfg->force_update) {
@@ -1217,8 +1237,6 @@ enum updater_error_codes update_firmware(struct updater_config *cfg)
 		      "--quirks=no_check_platform\n");
 		return UPDATE_ERR_PLATFORM;
 	}
-
-	bool wp_enabled = is_ap_write_protection_enabled(cfg);
 
 	if (try_apply_quirk(QUIRK_ENLARGE_IMAGE, cfg))
 		return UPDATE_ERR_SYSTEM_IMAGE;
@@ -1390,10 +1408,21 @@ static int updater_setup_archive(
 	struct u_archive *ar = cfg->archive;
 	const struct model_config *model;
 
-	if (cfg->dut_is_remote)
+	model = manifest_find_model(cfg, manifest, arg->model, arg->frid);
+	if (!model && cfg->dut_is_remote && arg->detect_model_only) {
+		/*
+		 * This is a workaround for archives without identity.csv, and
+		 * is supposed to be used on a remote DUT only. On a local DUT,
+		 * manifest_find_model() should always work.
+		 *
+		 * Note that manifest_detect_model_from_frid() may not give
+		 * the most accurate result, if multiple images in the archive
+		 * have the same FRID but with different versions.
+		 */
+		WARN("Unable to detect model for a remote DUT; "
+		     "falling back to FRID matching\n");
 		model = manifest_detect_model_from_frid(cfg, manifest);
-	else
-		model = manifest_find_model(cfg, manifest, arg->model);
+	}
 
 	if (!model)
 		return ++errorcnt;
@@ -1708,6 +1737,7 @@ int updater_setup_config(struct updater_config *cfg,
 	cfg->use_diff_image = arg->fast_update;
 	cfg->do_verify = !arg->fast_update;
 	cfg->factory_update = arg->is_factory;
+	cfg->check_fwid = arg->check_fwid;
 	if (arg->force_update)
 		cfg->force_update = 1;
 
@@ -1749,6 +1779,8 @@ int updater_setup_config(struct updater_config *cfg,
 		override_dut_property(DUT_PROP_WP_HW, cfg, 0);
 		override_dut_property(DUT_PROP_WP_SW_AP, cfg, 0);
 	}
+	if (arg->override_sku_id)
+		override_dut_property(DUT_PROP_SKU_ID, cfg, arg->sku_id);
 
 	/* Process the manifest. */
 	if (arg->do_manifest) {

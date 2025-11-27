@@ -293,7 +293,25 @@ static vb2_error_t rearrange_partitions(AvbOps *avb_ops,
 
 	/* Save vendor cmdline for booting */
 	vendor_hdr->cmdline[sizeof(vendor_hdr->cmdline) - 1] = '\0';
-	params->vendor_cmdline_buffer = (char *)vendor_hdr->cmdline;
+	params->real_cmdline_ptr = (char *)vendor_hdr->cmdline;
+
+	return VB2_SUCCESS;
+}
+
+static vb2_error_t prepare_dtbo(AvbSlotVerifyData *verify_data,
+			       struct vb2_kernel_params *params)
+{
+	AvbPartitionData *part;
+
+	part = avb_find_part(verify_data, GPT_ANDROID_DTBO);
+	if (!part) {
+		VB2_DEBUG("Continuing without a DTBO partition\n");
+		params->dtbo = NULL;
+		params->dtbo_size = 0;
+	} else {
+		params->dtbo = part->data;
+		params->dtbo_size = part->data_size;
+	}
 
 	return VB2_SUCCESS;
 }
@@ -307,25 +325,14 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	AvbSlotVerifyFlags avb_flags;
 	AvbSlotVerifyResult result;
 	vb2_error_t rv;
-	const char *boot_partitions[] = {
-		GptPartitionNames[GPT_ANDROID_BOOT],
-		GptPartitionNames[GPT_ANDROID_INIT_BOOT],
-		GptPartitionNames[GPT_ANDROID_VENDOR_BOOT],
-		GptPartitionNames[GPT_ANDROID_PVMFW],
-		NULL,
-	};
+	const char *boot_partitions[GPT_ANDROID_PRELOADED_NUM + 1] = {0};
+	size_t partition_count = 0;
 	const char *slot_suffix = NULL;
 	bool need_verification = vb2_need_kernel_verification(ctx);
 
-	/*
-	 * Check if the pvmfw buffer is zero sized
-	 * (ie. pvmfw loading is not requested)
-	 */
-	if (params->pvmfw_buffer_size == 0) {
-		VB2_DEBUG("Not loading pvmfw: not requested.\n");
-		boot_partitions[3] = NULL;
-		params->pvmfw_out_size = 0;
-	}
+	boot_partitions[partition_count++] = GptPartitionNames[GPT_ANDROID_BOOT];
+	boot_partitions[partition_count++] = GptPartitionNames[GPT_ANDROID_INIT_BOOT];
+	boot_partitions[partition_count++] = GptPartitionNames[GPT_ANDROID_VENDOR_BOOT];
 
 	/* Update flags to mark loaded GKI image */
 	params->flags = VB2_KERNEL_TYPE_BOOTIMG;
@@ -338,6 +345,22 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	else
 		return VB2_ERROR_ANDROID_INVALID_SLOT_SUFFIX;
 
+	/*
+	 * Check if the pvmfw buffer is zero sized
+	 * (ie. pvmfw loading is not requested)
+	 */
+	if (params->pvmfw_buffer_size &&
+	    GptFindEntryByName(gpt, GptPartitionNames[GPT_ANDROID_PVMFW], slot_suffix)) {
+		boot_partitions[partition_count++] = GptPartitionNames[GPT_ANDROID_PVMFW];
+	} else {
+		VB2_DEBUG("Not loading pvmfw: not requested or partition not present.\n");
+		params->pvmfw_out_size = 0;
+	}
+
+	/* If DTBO partition exists, include it in the list of partitions to be pre-loaded. */
+	if (GptFindEntryByName(gpt, GptPartitionNames[GPT_ANDROID_DTBO], slot_suffix))
+		boot_partitions[partition_count++] = GptPartitionNames[GPT_ANDROID_DTBO];
+
 	avb_ops = vboot_avb_ops_new(ctx, params, gpt, disk_handle, slot_suffix);
 	if (!avb_ops)
 		return VB2_ERROR_ANDROID_MEMORY_ALLOC;
@@ -346,6 +369,7 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	if (!need_verification)
 		avb_flags |= AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR;
 
+	VB2_ASSERT(boot_partitions[ARRAY_SIZE(boot_partitions) - 1] == NULL);
 	result = avb_slot_verify(avb_ops, boot_partitions, slot_suffix, avb_flags,
 				 AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE,
 				 &verify_data);
@@ -373,7 +397,7 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	if (rv != VB2_SUCCESS)
 		goto out;
 
-	rv = vb2ex_get_android_bootmode(ctx, disk_handle, gpt, &bootmode);
+	rv = vb2ex_handle_android_misc_partition(ctx, disk_handle, gpt, &bootmode);
 	if (rv != VB2_SUCCESS) {
 		VB2_DEBUG("Unable to get android bootmode\n");
 		goto out;
@@ -397,19 +421,20 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	 * locked).
 	 */
 	bool orange = !need_verification ||
-		      (recovery_boot && ctx->flags & VB2_GBB_FLAG_FORCE_UNLOCK_FASTBOOT);
+		(recovery_boot &&
+		 vb2api_gbb_get_flags(ctx) & VB2_GBB_FLAG_FORCE_UNLOCK_FASTBOOT);
 
 	/*
 	 * TODO(b/335901799): Add support for marking verifiedbootstate yellow
 	 */
-	int chars = snprintf(params->vboot_cmdline_buffer, params->vboot_cmdline_size,
+	int chars = snprintf(params->bootconfig_cmdline_buffer, params->bootconfig_cmdline_size,
 			     "%s %s=%s %s=%s %s=%s", verify_data->cmdline,
 			     VERIFIED_BOOT_PROPERTY_NAME,
 			     orange ? "orange" : "green",
 			     SLOT_SUFFIX_BOOT_PROPERTY_NAME, slot_suffix,
 			     ANDROID_FORCE_NORMAL_BOOT_PROPERTY_NAME, recovery_boot ? "0" : "1"
 			     );
-	if (chars < 0 || chars >= params->vboot_cmdline_size) {
+	if (chars < 0 || chars >= params->bootconfig_cmdline_size) {
 		VB2_DEBUG("ERROR: Command line doesn't fit provided buffer: %s\n",
 			  verify_data->cmdline);
 		rv = VB2_ERROR_ANDROID_CMDLINE_BUF_TOO_SMALL;
@@ -417,6 +442,10 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	}
 
 	rv = prepare_pvmfw(verify_data, params);
+	if (rv)
+		goto out;
+
+	rv = prepare_dtbo(verify_data, params);
 
 out:
 	/* No need for slot data */
