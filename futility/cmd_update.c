@@ -17,6 +17,7 @@
 
 enum {
 	OPT_DUMMY = 0x1000,
+	OPT_CHECK_FWID,
 	OPT_DETECT_MODEL_ONLY,
 	OPT_FACTORY,
 	OPT_FAST,
@@ -26,6 +27,8 @@ enum {
 	OPT_MANIFEST,
 	OPT_PARSEABLE_MANIFEST,
 	OPT_MODEL,
+	OPT_FRID,
+	OPT_SKU_ID,
 	OPT_OUTPUT_DIR,
 	OPT_QUIRKS,
 	OPT_QUIRKS_LIST,
@@ -52,6 +55,7 @@ static struct option const long_opts[] = {
 	{"archive", 1, NULL, 'a'},
 	{"mode", 1, NULL, 'm'},
 
+	{"check-fwid", 0, NULL, OPT_CHECK_FWID},
 	{"detect-model-only", 0, NULL, OPT_DETECT_MODEL_ONLY},
 	{"factory", 0, NULL, OPT_FACTORY},
 	{"fast", 0, NULL, OPT_FAST},
@@ -63,6 +67,8 @@ static struct option const long_opts[] = {
 	{"manifest", 0, NULL, OPT_MANIFEST},
 	{"parseable-manifest", 0, NULL, OPT_PARSEABLE_MANIFEST},
 	{"model", 1, NULL, OPT_MODEL},
+	{"frid", 1, NULL, OPT_FRID},
+	{"sku-id", 1, NULL, OPT_SKU_ID},
 	{"output_dir", 1, NULL, OPT_OUTPUT_DIR},
 	{"repack", 1, NULL, OPT_REPACK},
 	{"signature_id", 1, NULL, OPT_SIGNATURE},
@@ -104,6 +110,14 @@ static void print_help(int argc, char *argv[])
 		"-e, --ec_image=FILE \tEC firmware image (i.e, ec.bin)\n"
 		"-t, --try           \tTry A/B update on reboot if possible\n"
 		"-a, --archive=PATH  \tRead resources from archive\n"
+		"    --model=MODEL   \tSpecify or override the model name in the\n"
+		"                    \tarchive. This is useful for flashing over\n"
+		"                    \tservo, where crosid is not available.\n"
+		"    --frid=FRID     \tSpecify FRID to match in identity.csv\n"
+		"    --sku-id=SKU_ID \tSpecify SKU ID to match in identity.csv\n"
+		"                    \tSpecifying both --frid and --sku-id is\n"
+		"                    \tsufficient to decide the model name\n"
+		"                    \tfrom identity.csv\n"
 		"    --unpack=DIR    \tExtracts archive to DIR\n"
 		"    --fast          \tReduce read cycles and do not verify\n"
 		"    --quirks=LIST   \tSpecify the quirks to apply\n"
@@ -113,6 +127,9 @@ static void print_help(int argc, char *argv[])
 		"    --parseable-manifest\n"
 		"                    \tScan the archive to print a manifest\n"
 		"                    \tin shell-parseable format\n"
+		"    --check-fwid    \tCompare firmware id before performing\n"
+		"                    \tan update. Skip the update if the versions are\n"
+		"                    \tthe same.\n"
 		SHARED_FLASH_ARGS_HELP
 		"\n"
 		" * Option --manifest requires either -a,--archive or -i,--image\n"
@@ -145,7 +162,6 @@ static void print_help(int argc, char *argv[])
 		"Debugging and testing options:\n"
 		"    --wp=1|0        \tSpecify write protection status\n"
 		"    --host_only     \tUpdate only AP (host) firmware\n"
-		"    --model=MODEL   \tOverride system model for images\n"
 		"    --detect-model-only\tDetect model by reading the FRID and exit\n"
 		"    --gbb_flags=FLAG\tOverride new GBB flags\n"
 		"    --sys_props=LIST\tList of system properties to override\n"
@@ -235,6 +251,18 @@ static int do_update(int argc, char *argv[])
 			sig = optarg;
 			args.model = optarg;
 			break;
+		case OPT_FRID:
+			args.frid = optarg;
+			break;
+		case OPT_SKU_ID:
+			args.sku_id = strtoul(optarg, &endptr, 0);
+			if (*endptr) {
+				ERROR("Invalid --sku-id: %s\n", optarg);
+				errorcnt++;
+			} else {
+				args.override_sku_id = true;
+			}
+			break;
 		case OPT_DETECT_MODEL_ONLY:
 			args.detect_model_only = true;
 			break;
@@ -272,6 +300,9 @@ static int do_update(int argc, char *argv[])
 			} else {
 				args.override_gbb_flags = 1;
 			}
+			break;
+		case OPT_CHECK_FWID:
+			args.check_fwid = true;
 			break;
 		case OPT_DUMMY:
 			break;
