@@ -109,6 +109,7 @@ int write_system_firmware(struct updater_config *cfg,
 
 struct firmware_section {
 	uint8_t *data;
+	size_t offset;
 	size_t size;
 };
 
@@ -260,6 +261,9 @@ int dut_get_property_int(const char *key, struct updater_config *cfg);
 
 /* Gets the 'firmware manifest key' on the DUT. */
 int dut_get_manifest_key(char **manifest_key_out, struct updater_config *cfg);
+
+/* Gets the Android property ro.product.name. */
+char *dut_get_android_product(struct updater_config *cfg);
 
 enum check_fwid_return_value {
 	FWID_CHECK_UPDATE_NEEDED = 0,
