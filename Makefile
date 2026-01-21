@@ -39,7 +39,7 @@
 SRCDIR := $(shell pwd)
 BUILD = ${SRCDIR}/build
 export BUILD
-LIBAVB_SRCDIR ?= firmware/avb/libavb
+LIBAVB_SRCDIR ?= ../../aosp/external/avb/
 
 # Stuff for 'make install'
 INSTALL = install
@@ -483,10 +483,10 @@ ifneq ($(filter-out 0,${USE_FLASHROM}),)
 $(info building with libflashrom support)
 export VBOOT_TEST_USE_FLASHROM = 1
 FLASHROM_LIBS := $(shell ${PKG_CONFIG} --libs flashrom)
-COMMONLIB_SRCS += \
-	host/lib/flashrom.c \
-	host/lib/flashrom_drv.c
-CFLAGS += -DUSE_FLASHROM
+COMMONLIB_SRCS += host/lib/flashrom_drv.c
+CFLAGS += -DUSE_FLASHROM=1
+else
+COMMONLIB_SRCS += host/lib/flashrom.c
 endif
 COMMONLIB_SRCS += \
 	host/lib/subprocess.c \
@@ -860,9 +860,15 @@ TEST2X_NAMES = \
 	tests/vb2_verify_fw \
 	tests/hmac_test
 
-ifneq ($(filter-out 0,${USE_FLASHROM}),)
+ifeq ($(filter-out 0,${USE_FLASHROM}),)
 TEST2X_NAMES += \
 	tests/vb2_host_flashrom_tests
+endif
+
+ifneq ($(filter-out 0,${USE_AVB}),)
+TEST2X_NAMES += \
+	tests/vb2_avb_tests \
+	tests/vb2_load_android_tests
 endif
 
 TEST21_NAMES = \
@@ -1147,6 +1153,9 @@ ${UTIL_BINS_SDK}: ${UTILLIB}
 ${UTIL_BINS_SDK}: LIBS = ${UTILLIB}
 ${UTIL_BINS_BOARD}: ${UTILLIB}
 ${UTIL_BINS_BOARD}: LIBS = ${UTILLIB}
+ifneq ($(filter-out 0,${USE_FLASHROM}),)
+${UTIL_BINS_BOARD}: LDLIBS += ${FLASHROM_LIBS}
+endif
 
 ${UTIL_SCRIPTS_SDK} ${UTIL_SCRIPTS_BOARD}: ${BUILD}/%: %
 	${Q}cp -f $< $@
@@ -1430,6 +1439,10 @@ endif
 run2tests: install_for_test
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_api_tests
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_auxfw_sync_tests
+ifneq ($(filter-out 0,${USE_AVB}),)
+	${RUNTEST} ${BUILD_RUN}/tests/vb2_avb_tests ${TEST_KEYS}
+	${RUNTEST} ${BUILD_RUN}/tests/vb2_load_android_tests
+endif
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_common_tests
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_common2_tests ${TEST_KEYS}
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_common3_tests ${TEST_KEYS}
@@ -1438,7 +1451,7 @@ run2tests: install_for_test
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_firmware_tests
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_gbb_init_tests
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_gbb_tests
-ifneq ($(filter-out 0,${USE_FLASHROM}),)
+ifeq ($(filter-out 0,${USE_FLASHROM}),)
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_host_flashrom_tests
 endif
 	${RUNTEST} ${BUILD_RUN}/tests/vb2_host_key_tests
@@ -1465,9 +1478,12 @@ endif
 	${RUNTEST} ${BUILD_RUN}/tests/vb21_host_sig_tests ${TEST_KEYS}
 	${RUNTEST} ${BUILD_RUN}/tests/hmac_test
 
-.PHONY: runfutiltests
-runfutiltests: install_for_test
+.PHONY: runfutiltestscripts
+runfutiltestscripts: install_for_test
 	${RUNTEST} ${SRC_RUN}/tests/futility/run_test_scripts.sh
+
+.PHONY: runfutiltests
+runfutiltests: install_for_test runfutiltestscripts
 	${RUNTEST} ${BUILD_RUN}/tests/futility/test_file_types
 	${RUNTEST} ${BUILD_RUN}/tests/futility/test_not_really
 ifneq ($(filter-out 0,${USE_FLASHROM}),)

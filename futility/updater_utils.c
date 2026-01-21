@@ -317,14 +317,14 @@ int find_firmware_section(struct firmware_section *section,
 	FmapAreaHeader *fah = NULL;
 	uint8_t *ptr;
 
-	section->data = NULL;
-	section->size = 0;
+	memset(section, 0, sizeof(*section));
 	ptr = fmap_find_by_name(
 			image->data, image->size, image->fmap_header,
 			section_name, &fah);
 	if (!ptr)
 		return -1;
 	section->data = (uint8_t *)ptr;
+	section->offset = fah->area_offset;
 	section->size = fah->area_size;
 	return 0;
 }
@@ -687,7 +687,7 @@ int write_system_firmware(struct updater_config *cfg,
 			WARN("Retry writing firmware (%d/%d)...\n", i, tries);
 		INFO("Writing SPI Flash..\n");
 		if (flashrom_write_image(image, regions, regions_len, flash_contents,
-					 cfg->do_verify, verbose) == VB2_SUCCESS)
+					 !!cfg->do_verify, verbose) == VB2_SUCCESS)
 			r = 0;
 		/*
 		 * Force a newline to flush stdout in case if

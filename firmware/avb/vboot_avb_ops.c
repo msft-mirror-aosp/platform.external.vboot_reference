@@ -261,7 +261,7 @@ static AvbIOResult get_preloaded_partition(AvbOps *ops,
 	}
 
 	if (num_bytes > part->alloced_size) {
-		VB2_DEBUG("Try to load too many bytes (%ld) into buffer of size (%ld) for %s\n",
+		VB2_DEBUG("Try to load too many bytes (%zu) into buffer of size (%zu) for %s\n",
 			  num_bytes, part->alloced_size, partition);
 		num_bytes = part->alloced_size;
 	}
@@ -275,7 +275,7 @@ static AvbIOResult get_preloaded_partition(AvbOps *ops,
 	*out_pointer = part->buffer;
 	*out_num_bytes_preloaded = VB2_MIN(num_bytes, data_size);
 	part->loaded_size = data_size;
-	VB2_DEBUG("Load %s into %p bytes:%lx\n", partition, *out_pointer, num_bytes);
+	VB2_DEBUG("Load %s into %p bytes:%zx\n", partition, *out_pointer, num_bytes);
 
 	return AVB_IO_RESULT_OK;
 }
@@ -284,12 +284,14 @@ static AvbIOResult read_rollback_index(AvbOps *ops,
 				       size_t rollback_index_slot,
 				       uint64_t *out_rollback_index)
 {
-	/*
-	 * TODO(b/324230492): Implement rollback protection
-	 * For now we always return 0 as the stored rollback index.
-	 */
-	VB2_DEBUG("TODO: not implemented yet\n");
-	if (out_rollback_index != NULL)
+	if (rollback_index_slot != 0 || out_rollback_index == NULL)
+		return AVB_IO_RESULT_ERROR_NO_SUCH_VALUE;
+
+	struct vboot_avb_ctx *avbctx = user_data(ops);
+	struct vb2_shared_data *sd = vb2_get_sd(avbctx->vb2_ctx);
+	if (!(vb2api_gbb_get_flags(avbctx->vb2_ctx) & VB2_GBB_FLAG_DISABLE_ROLLBACK_CHECK))
+		*out_rollback_index = sd->kernel_version_secdata;
+	else
 		*out_rollback_index = 0;
 
 	return AVB_IO_RESULT_OK;
