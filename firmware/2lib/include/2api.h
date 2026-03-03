@@ -720,27 +720,27 @@ vb2_error_t vb2api_load_kernel(struct vb2_context *ctx,
 			       struct vb2_kernel_params *params,
 			       struct vb2_disk_info *disk_info);
 
-/* miniOS flags */
+/* Network Based Recovery (NBR) flags */
 
-/* Boot from non-active miniOS partition only. */
-#define VB2_MINIOS_FLAG_NON_ACTIVE (1 << 0)
+/* Boot from non-active NBR partition only. */
+#define VB2_NBR_FLAG_NON_ACTIVE (1 << 0)
 
 /**
- * Attempt to load miniOS kernel from the specified device. On success, the
- * output fields of params will be filled. The caller should set the input
- * fields of params.
+ * Attempt to load Network Based Recovery (NBR) kernel from the specified device.
+ * On success, the output fields of params will be filled. The caller should set
+ * the input fields of params.
  *
  * @param ctx		Vboot context
  * @param params	Params specific to loading the kernel
  * @param disk_info	Disk from which to read kernel
- * @param minios_flags	Flags for miniOS
+ * @param nbr_flags	Flags for recovery mechanism
  *
  * @return VB2_SUCCESS, or non-zero error code.
  */
-vb2_error_t vb2api_load_minios_kernel(struct vb2_context *ctx,
-				      struct vb2_kernel_params *params,
-				      struct vb2_disk_info *disk_info,
-				      uint32_t minios_flags);
+vb2_error_t vb2api_load_nbr_kernel(struct vb2_context *ctx,
+				   struct vb2_kernel_params *params,
+				   struct vb2_disk_info *disk_info,
+				   uint32_t nbr_flags);
 
 /**
  * Clean up after kernel verification.
@@ -1055,6 +1055,18 @@ enum vb2_android_bootmode {
 	/* Boot android into recovery mode */
 	VB2_ANDROID_RECOVERY_BOOT = 1,
 };
+
+/**
+ * Create a sub-disk (slice) handle from an existing disk.
+ *
+ * @param parent	Parent disk information
+ * @param offset	Offset in sectors from the start of the parent disk
+ * @param size		Size in sectors of the slice
+ * @param child_out	Returns pointer to newly allocated child disk info
+ * @return VB2_SUCCESS, or non-zero error code.
+ */
+vb2_error_t vb2ex_slice_disk(vb2ex_disk_handle_t parent, uint64_t offset, uint64_t size,
+			     struct vb2_disk_info **child_out);
 
 /**
  * Get Android boot mode.
