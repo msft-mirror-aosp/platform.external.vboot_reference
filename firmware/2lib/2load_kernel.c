@@ -479,15 +479,16 @@ static vb2_error_t try_minios_kernel(struct vb2_context *ctx,
 	if (rv)
 		return VB2_ERROR_LK_NO_KERNEL_FOUND;
 
+	params->disk_handle = disk_info->handle;
 	sd->kernel_version = kernel_version;
 
 	return rv;
 }
 
-static vb2_error_t try_minios_sectors(struct vb2_context *ctx,
-				      struct vb2_kernel_params *params,
-				      struct vb2_disk_info *disk_info,
-				      uint64_t start, uint64_t count)
+static vb2_error_t try_nbr_sectors(struct vb2_context *ctx,
+				   struct vb2_kernel_params *params,
+				   struct vb2_disk_info *disk_info,
+				   uint64_t start, uint64_t count)
 {
 	const uint32_t buf_size = count * disk_info->bytes_per_lba;
 	char *buf;
@@ -515,25 +516,52 @@ static vb2_error_t try_minios_sectors(struct vb2_context *ctx,
 	VbExStreamClose(stream);
 
 	for (isector = 0; isector < count; isector++) {
-		if (memcmp(buf + isector * disk_info->bytes_per_lba,
-			   VB2_KEYBLOCK_MAGIC, VB2_KEYBLOCK_MAGIC_SIZE))
-			continue;
-		VB2_DEBUG("Match on sector %" PRIu64 " / %" PRIu64 "\n",
-			  start + isector,
-			  disk_info->lba_count - 1);
-		rv = try_minios_kernel(ctx, params, disk_info, start + isector);
-		if (rv == VB2_SUCCESS)
-			break;
+		void *sector = buf + isector * disk_info->bytes_per_lba;
+		/* Try legacy MiniOS recovery kernel */
+		if (!memcmp(sector, VB2_KEYBLOCK_MAGIC, VB2_KEYBLOCK_MAGIC_SIZE)) {
+			VB2_DEBUG("Match MiniOS on sector %" PRIu64 " / %" PRIu64 "\n",
+				  start + isector,
+				  disk_info->lba_count - 1);
+			rv = try_minios_kernel(ctx, params, disk_info, start + isector);
+			if (rv == VB2_SUCCESS)
+				break;
+		}
+
+#ifdef USE_LIBAVB
+		/* Try OTA recovery partition */
+		static const Guid recovery_disk_uuid = GPT_DISK_UUID_RECOVERY;
+		GptHeader *recovery_header = (GptHeader *)sector;
+		if (!memcmp(&recovery_header->disk_uuid, &recovery_disk_uuid, sizeof(Guid)) &&
+		    recovery_header->my_lba == GPT_PMBR_SECTORS &&
+		    start + isector > 0) {
+			struct vb2_disk_info *child_disk;
+			uint64_t lba_start = start + isector - 1; /* disk UUID is in sector 1 */
+			uint64_t size = recovery_header->alternate_lba + 1;
+
+			VB2_DEBUG("Match OTA recovery on sector %" PRIu64 " / %" PRIu64 "\n",
+				  start + isector,
+				  disk_info->lba_count - 1);
+
+			if (lba_start + size > disk_info->lba_count)
+				continue;
+			if (vb2ex_slice_disk(disk_info->handle, lba_start, size, &child_disk))
+				continue;
+
+			rv = vb2api_load_kernel(ctx, params, child_disk);
+			if (rv == VB2_SUCCESS)
+				break;
+		}
+#endif
 	}
 
 	free(buf);
 	return rv;
 }
 
-static vb2_error_t try_minios_sector_region(struct vb2_context *ctx,
-					    struct vb2_kernel_params *params,
-					    struct vb2_disk_info *disk_info,
-					    int end_region)
+static vb2_error_t try_nbr_region(struct vb2_context *ctx,
+				  struct vb2_kernel_params *params,
+				  struct vb2_disk_info *disk_info,
+				  int end_region)
 {
 	const uint64_t disk_count_half = (disk_info->lba_count + 1) / 2;
 	const uint64_t check_count_256 = 256 * 1024
@@ -560,8 +588,7 @@ static vb2_error_t try_minios_sector_region(struct vb2_context *ctx,
 
 	VB2_DEBUG("Checking %s of disk for kernels...\n", region_name);
 	for (sector = start; sector < end; sector += batch_count) {
-		rv = try_minios_sectors(ctx, params, disk_info, sector,
-					batch_count);
+		rv = try_nbr_sectors(ctx, params, disk_info, sector, batch_count);
 		if (rv == VB2_SUCCESS)
 			return rv;
 	}
@@ -571,29 +598,23 @@ static vb2_error_t try_minios_sector_region(struct vb2_context *ctx,
 
 /*
  * Search for kernels by sector, rather than by partition.  Only sectors near
- * the start and end of disks are considered, and the kernel must start exactly
- * at the first byte of the sector.
+ * the start and end of disks are considered.
  */
-vb2_error_t vb2api_load_minios_kernel(struct vb2_context *ctx,
-				      struct vb2_kernel_params *params,
-				      struct vb2_disk_info *disk_info,
-				      uint32_t minios_flags)
+vb2_error_t vb2api_load_nbr_kernel(struct vb2_context *ctx,
+				   struct vb2_kernel_params *params,
+				   struct vb2_disk_info *disk_info,
+				   uint32_t nbr_flags)
 {
 	vb2_error_t rv;
 	int end_region_first = vb2_nv_get(ctx, VB2_NV_MINIOS_PRIORITY);
 
-	if (minios_flags & VB2_MINIOS_FLAG_NON_ACTIVE)
+	if (nbr_flags & VB2_NBR_FLAG_NON_ACTIVE)
 		rv = VB2_ERROR_UNKNOWN;  /* Ignore active partition */
 	else
-		rv = try_minios_sector_region(ctx, params, disk_info,
-					      end_region_first);
+		rv = try_nbr_region(ctx, params, disk_info, end_region_first);
 
 	if (rv)
-		rv = try_minios_sector_region(ctx, params, disk_info,
-					      !end_region_first);
-
-	if (rv == VB2_SUCCESS)
-		params->disk_handle = disk_info->handle;
+		rv = try_nbr_region(ctx, params, disk_info, !end_region_first);
 
 	return rv;
 }
