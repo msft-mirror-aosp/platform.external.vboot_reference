@@ -624,6 +624,13 @@ struct vb2_kernel_params {
 	/* dtbo address & size */
 	void *dtbo;
 	size_t dtbo_size;
+
+	/*
+	 * Microdroid vendor partition digest extracted by AVB from vbmeta
+	 * 'com.android.build.microdroid-vendor.root_digest' property.
+	 * NULL if the property was not found.
+	 */
+	char *microdroid_vendor_digest;
 };
 
 /*****************************************************************************/

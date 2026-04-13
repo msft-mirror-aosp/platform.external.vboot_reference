@@ -20,6 +20,8 @@
 #define GPT_ENT_NAME_ANDROID_A_SUFFIX "_a"
 #define GPT_ENT_NAME_ANDROID_B_SUFFIX "_b"
 
+#define MICRODROID_VENDOR_DIGEST_KEY "com.android.build.microdroid-vendor.root_digest"
+
 #define VERIFIED_BOOT_PROPERTY_NAME "androidboot.verifiedbootstate"
 #define SLOT_SUFFIX_BOOT_PROPERTY_NAME "androidboot.slot_suffix"
 #define ANDROID_FORCE_NORMAL_BOOT_PROPERTY_NAME "androidboot.force_normal_boot"
@@ -193,6 +195,24 @@ static vb2_error_t prepare_vendor_ramdisks(struct vendor_boot_img_hdr_v4 *vendor
 	}
 
 	return VB2_SUCCESS;
+}
+
+static const char *find_avb_prop(AvbSlotVerifyData *verify_data, const char *key)
+{
+	AvbVBMetaData *vbmeta;
+	const char *value;
+	size_t i;
+
+	for (i = 0; i < verify_data->num_vbmeta_images; i++) {
+		vbmeta = &verify_data->vbmeta_images[i];
+
+		value = avb_property_lookup(vbmeta->vbmeta_data, vbmeta->vbmeta_size, key, 0,
+					     NULL);
+		if (value)
+			return value;
+	}
+
+	return NULL;
 }
 
 static vb2_error_t prepare_pvmfw(AvbSlotVerifyData *verify_data,
@@ -573,6 +593,15 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 	bool orange = !need_verification ||
 		(recovery_boot &&
 		 vb2api_gbb_get_flags(ctx) & VB2_GBB_FLAG_FORCE_UNLOCK_FASTBOOT);
+
+	/*
+	 * Try to find the microdroid vendor partition digest from the host vbmeta
+	 * properties. If missing set to NULL.
+	 */
+	const char *microdroid_vendor_digest =
+		find_avb_prop(verify_data, MICRODROID_VENDOR_DIGEST_KEY);
+	params->microdroid_vendor_digest =
+		microdroid_vendor_digest ? strdup(microdroid_vendor_digest) : NULL;
 
 	/*
 	 * TODO(b/335901799): Add support for marking verifiedbootstate yellow
