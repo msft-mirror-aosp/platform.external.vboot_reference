@@ -4,6 +4,7 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
 #include <string.h>
 
 #include "futility.h"
@@ -93,9 +94,14 @@ static int archive_zip_read_file(void *handle, const char *fname,
 		ERROR("Failed to open entry in ZIP: %s\n", fname);
 		return 1;
 	}
+	if (stat.size >= UINT32_MAX) {
+		ERROR("Invalid entry size %" PRIu64 ": %s\n", stat.size, fname);
+		zip_fclose(fp);
+		return 1;
+	}
 	*data = (uint8_t *)malloc(stat.size + 1);
 	if (*data) {
-		if (zip_fread(fp, *data, stat.size) == stat.size) {
+		if (zip_fread(fp, *data, stat.size) == (zip_int64_t)stat.size) {
 			if (mtime)
 				*mtime = stat.mtime;
 			*size = stat.size;

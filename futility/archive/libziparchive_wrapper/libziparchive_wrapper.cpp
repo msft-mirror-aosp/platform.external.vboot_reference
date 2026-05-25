@@ -6,6 +6,7 @@
 #include <ziparchive/zip_archive.h>
 #include <ziparchive/zip_writer.h>
 
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 
@@ -159,8 +160,20 @@ int libziparchive_extract_entry(struct libziparchive_handle *handle,
 	auto reader = (ZipArchiveHandle)handle->reader;
 	auto target = (ZipEntry64 *)entry;
 
-	*size = target->uncompressed_length;
+	if (target->uncompressed_length >= UINT32_MAX) {
+		fprintf(stderr, "ERROR: libziparchive_wrapper: entry too large (%" PRIu64 ")\n",
+			target->uncompressed_length);
+		return LIBZIPARCHIVE_WRAPPER_FAILURE;
+	}
+
+	*size = (size_t)target->uncompressed_length;
 	*data = (uint8_t *)malloc(*size);
+
+	if (!*data) {
+		fprintf(stderr, "ERROR: libziparchive_wrapper: failed to allocate %zu bytes\n",
+			*size);
+		return LIBZIPARCHIVE_WRAPPER_FAILURE;
+	}
 
 	return ExtractToMemory(reader, target, *data, *size);
 }

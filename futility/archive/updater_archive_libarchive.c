@@ -4,6 +4,7 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -152,14 +153,20 @@ static struct archive_cache *libarchive_read_file_entries(
 			continue;
 
 		assert(r == FILTER_READ_ALL);
-		c->size = archive_entry_size(entry);
+		int64_t entry_size = archive_entry_size(entry);
+		if (entry_size < 0 || entry_size >= UINT32_MAX) {
+			WARN("Invalid entry size %" PRId64 ": %s\n",
+			     entry_size, c->name);
+			continue;
+		}
+		c->size = (size_t)entry_size;
 		c->mtime = archive_entry_mtime(entry);
 		c->data = (uint8_t *)calloc(1, c->size + 1);
 		if (!c->data) {
 			WARN("Out of memory when loading: %s\n", c->name);
 			continue;
 		}
-		if (archive_read_data(a, c->data, c->size) != c->size) {
+		if (archive_read_data(a, c->data, c->size) != (ssize_t)c->size) {
 			WARN("Failed reading from archive: %s\n", c->name);
 			continue;
 		}
