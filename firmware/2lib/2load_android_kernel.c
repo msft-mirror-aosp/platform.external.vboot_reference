@@ -317,6 +317,134 @@ static vb2_error_t prepare_dtbo(AvbSlotVerifyData *verify_data,
 	return VB2_SUCCESS;
 }
 
+static void print_avb_slot_verify_data(const AvbSlotVerifyData *data)
+{
+	if (!data) {
+		VB2_DEBUG("AvbSlotVerifyData is NULL\n");
+		return;
+	}
+	VB2_DEBUG("AvbSlotVerifyData:\n");
+	VB2_DEBUG("  ab_suffix: %s\n", data->ab_suffix);
+	for (size_t i = 0; i < data->num_vbmeta_images; i++) {
+		const AvbVBMetaData *vbmeta = &data->vbmeta_images[i];
+		VB2_DEBUG("  vbmeta '%s' verify_result: %d\n",
+			  vbmeta->partition_name, vbmeta->verify_result);
+	}
+	for (size_t i = 0; i < data->num_loaded_partitions; i++) {
+		const AvbPartitionData *part = &data->loaded_partitions[i];
+		VB2_DEBUG("  loaded '%s' data_size: %zu "
+			  "preloaded: %d verify_result: %#x\n",
+			  part->partition_name, part->data_size,
+			  part->preloaded, part->verify_result);
+	}
+
+	VB2_DEBUG("  rollback_index: %"PRIu64"\n", (uint64_t)data->rollback_indexes[0]);
+}
+
+static vb2_error_t verify_avb_data(const AvbSlotVerifyData *verify_data,
+				   AvbOps *avb_ops,
+				   const char *expected_slot_suffix,
+				   const char **requested_partitions,
+				   bool need_verification)
+{
+	if (!verify_data) {
+		VB2_DEBUG("ERROR: verify_data is NULL\n");
+		return VB2_ERROR_AVB_ERROR_VERIFICATION;
+	}
+
+	/* Verify suffix */
+	if (!verify_data->ab_suffix ||
+	    strcmp(verify_data->ab_suffix, expected_slot_suffix) != 0) {
+		VB2_DEBUG("ERROR: suffix mismatch. Expected %s, got %s\n",
+			  expected_slot_suffix,
+			  verify_data->ab_suffix ? verify_data->ab_suffix : "(null)");
+		return VB2_ERROR_ANDROID_INVALID_SLOT_SUFFIX;
+	}
+
+	/* Verify all requested partitions are loaded and preloaded */
+	for (size_t i = 0; requested_partitions[i] != NULL; i++) {
+		const char *part_name = requested_partitions[i];
+		const AvbPartitionData *part = NULL;
+		bool found = false;
+		for (size_t j = 0; j < verify_data->num_loaded_partitions; j++) {
+			part = &verify_data->loaded_partitions[j];
+			if (part->partition_name &&
+			    strcmp(part->partition_name, part_name) == 0) {
+				found = true;
+				break;
+			}
+		}
+
+		if (!found) {
+			VB2_DEBUG("ERROR: partition %s not found in loaded partitions\n",
+				  part_name);
+			return VB2_ERROR_AVB_ERROR_VERIFICATION;
+		}
+
+		if (!part->preloaded) {
+			VB2_DEBUG("ERROR: Partition %s is not preloaded\n",
+				  part_name);
+			return VB2_ERROR_AVB_ERROR_IO;
+		}
+
+		enum GptPartition gpt_part = GPT_ANDROID_PRELOADED_NUM;
+		for (size_t k = 0; k < GPT_ANDROID_PRELOADED_NUM; k++) {
+			if (strcmp(part_name, GptPartitionNames[k]) == 0) {
+				gpt_part = (enum GptPartition)k;
+				break;
+			}
+		}
+		if (gpt_part == GPT_ANDROID_PRELOADED_NUM) {
+			VB2_DEBUG("ERROR: Partition %s is not in preloaded list\n",
+				  part_name);
+			return VB2_ERROR_AVB_ERROR_IO;
+		}
+
+		/* Verify that libavb used our reserved preloaded buffer. */
+		void *buffer;
+		size_t size;
+		AvbIOResult rv = vb2_android_get_buffer(avb_ops, gpt_part, &buffer, &size);
+		if (rv != AVB_IO_RESULT_OK || buffer != part->data ||
+		    size != part->data_size) {
+			VB2_DEBUG("ERROR: Partition %s buffer verification failed\n",
+				  part_name);
+			return VB2_ERROR_AVB_ERROR_IO;
+		}
+
+		if (!need_verification)
+			continue;
+
+		if (part->verify_result != AVB_SLOT_VERIFY_RESULT_OK) {
+			VB2_DEBUG("ERROR: '%s' verification failed: %d\n",
+				  part_name, part->verify_result);
+			return VB2_ERROR_AVB_ERROR_VERIFICATION;
+		}
+
+		if (!part->digest || part->digest_size == 0) {
+			VB2_DEBUG("ERROR: Partition %s has no digest\n",
+				  part_name);
+			return VB2_ERROR_AVB_ERROR_VERIFICATION;
+		}
+	}
+
+	if (!need_verification)
+		goto out;
+
+	/* Verify vbmeta images if verification is needed */
+	for (size_t i = 0; i < verify_data->num_vbmeta_images; i++) {
+		const AvbVBMetaData *vbmeta = &verify_data->vbmeta_images[i];
+		if (vbmeta->verify_result != AVB_VBMETA_VERIFY_RESULT_OK) {
+			VB2_DEBUG("ERROR: VBMeta image %s verification failed: %d\n",
+				  vbmeta->partition_name ? vbmeta->partition_name : "(null)",
+				  vbmeta->verify_result);
+			return VB2_ERROR_AVB_ERROR_VERIFICATION;
+		}
+	}
+
+out:
+	return VB2_SUCCESS;
+}
+
 vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *entry,
 			     struct vb2_kernel_params *params, vb2ex_disk_handle_t disk_handle,
 			     uint32_t *kernel_version)
@@ -396,6 +524,13 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 
 	/* Map AVB return code into VB2 code */
 	rv = vb2_map_libavb_errors(result);
+	if (rv != VB2_SUCCESS)
+		goto out;
+
+	print_avb_slot_verify_data(verify_data);
+
+	rv = verify_avb_data(verify_data, avb_ops, slot_suffix, boot_partitions,
+			     need_verification);
 	if (rv != VB2_SUCCESS)
 		goto out;
 
