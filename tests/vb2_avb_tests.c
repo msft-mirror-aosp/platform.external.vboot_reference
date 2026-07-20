@@ -12,6 +12,7 @@
 #include "2common.h"
 #include "2nvstorage.h"
 #include "2secdata.h"
+#include "2secdata_struct.h"
 #include "2struct.h"
 #include "cgptlib_internal.h"
 #include "common/tests.h"
@@ -357,6 +358,16 @@ static void read_rollback_tests(AvbOps *avb_ops)
 	TEST_EQ(rollback_index, 0, "correct rollback index");
 	gbb_hdr.flags = 0;
 
+	vb2_ctx->flags = VB2_CONTEXT_DEVELOPER_MODE;
+	sd->flags = VB2_SD_FLAG_DEV_MODE_ENABLED;
+	vb2_set_boot_mode(vb2_ctx);
+	TEST_EQ(avb_ops->read_rollback_index(avb_ops, 0, &rollback_index), AVB_IO_RESULT_OK,
+		"read rollback - developer mode");
+	TEST_EQ(rollback_index, 0, "correct rollback index");
+	vb2_ctx->flags = 0;
+	sd->flags = 0;
+	vb2_set_boot_mode(vb2_ctx);
+
 	TEST_EQ(avb_ops->read_rollback_index(avb_ops, 1, &rollback_index),
 		AVB_IO_RESULT_ERROR_NO_SUCH_VALUE, "read rollback - incorrect index");
 
@@ -438,6 +449,106 @@ static void get_unique_guid_for_partition_test(AvbOps *avb_ops)
 		AVB_IO_RESULT_ERROR_NO_SUCH_PARTITION, "unique for non exist partition");
 }
 
+static void validate_vbmeta_public_key_fwmp_tests(AvbOps *avb_ops)
+{
+	AvbIOResult ret;
+	bool key_is_trusted;
+	struct vb2_secdata_fwmp *fwmp = (struct vb2_secdata_fwmp *)vb2_ctx->secdata_fwmp;
+	struct vb2_hash hash;
+
+	// Reset FWMP
+	memset(fwmp, 0, sizeof(*fwmp));
+	fwmp->struct_size = sizeof(*fwmp);
+	fwmp->struct_version = VB2_SECDATA_FWMP_VERSION;
+	sd->status |= VB2_SD_STATUS_SECDATA_FWMP_INIT;
+	vb2_ctx->flags &= ~VB2_CONTEXT_NO_SECDATA_FWMP;
+
+	// Dev mode, DEV_USE_KEY_HASH is set, hash matches.
+	vb2_ctx->flags |= VB2_CONTEXT_DEVELOPER_MODE;
+	sd->flags |= VB2_SD_FLAG_DEV_MODE_ENABLED;
+	vb2_set_boot_mode(vb2_ctx);
+	fwmp->flags = VB2_SECDATA_FWMP_DEV_USE_KEY_HASH;
+
+	// Setup key 1 (RSA2048)
+	TEST_EQ_S(setup(1), 0);
+
+	// Calculate hash of avb_key_data
+	TEST_EQ(vb2_hash_calculate(0, avb_key_data, avb_key_len, VB2_HASH_SHA256, &hash),
+		 VB2_SUCCESS, "Calculate key hash for test");
+	memcpy(fwmp->dev_key_hash, hash.sha256, sizeof(fwmp->dev_key_hash));
+	fwmp->crc8 = vb2_secdata_fwmp_crc(fwmp);
+
+	ret = avb_ops->validate_vbmeta_public_key(avb_ops, avb_key_data, avb_key_len,
+							NULL, 0, &key_is_trusted);
+	TEST_EQ(ret, AVB_IO_RESULT_OK, "validate_vbmeta_public_key - dev mode, hash matches");
+	TEST_EQ(key_is_trusted, true, "Key is trusted");
+	clean();
+
+	// Dev mode, DEV_USE_KEY_HASH is set, hash mismatch.
+	TEST_EQ_S(setup(1), 0);
+	// Corrupt the hash in FWMP
+	fwmp->dev_key_hash[0] ^= 0xff;
+	fwmp->crc8 = vb2_secdata_fwmp_crc(fwmp);
+
+	ret = avb_ops->validate_vbmeta_public_key(avb_ops, avb_key_data, avb_key_len,
+							NULL, 0, &key_is_trusted);
+	TEST_EQ(ret, AVB_IO_RESULT_OK, "validate_vbmeta_public_key - dev mode, hash mismatch");
+	TEST_EQ(key_is_trusted, false, "Key is NOT trusted");
+	clean();
+
+	// Normal mode, DEV_USE_KEY_HASH is set (should be ignored, checks against RO key).
+	// Setup RO key and AVB key as key 1 (matching)
+	TEST_EQ_S(setup(1), 0);
+
+	// Set FWMP hash to mismatching (corrupted key 1 hash)
+	TEST_EQ(vb2_hash_calculate(0, avb_key_data, avb_key_len, VB2_HASH_SHA256, &hash),
+		 VB2_SUCCESS, "Calculate key hash for test");
+	memcpy(fwmp->dev_key_hash, hash.sha256, sizeof(fwmp->dev_key_hash));
+	fwmp->dev_key_hash[0] ^= 0xff; // corrupt it
+	fwmp->crc8 = vb2_secdata_fwmp_crc(fwmp);
+
+	// Set to normal mode
+	vb2_ctx->flags &= ~VB2_CONTEXT_DEVELOPER_MODE;
+	sd->flags &= ~VB2_SD_FLAG_DEV_MODE_ENABLED;
+	vb2_set_boot_mode(vb2_ctx);
+
+	ret = avb_ops->validate_vbmeta_public_key(avb_ops, avb_key_data, avb_key_len,
+						  NULL, 0, &key_is_trusted);
+	TEST_EQ(ret, AVB_IO_RESULT_OK, "validate_vbmeta_public_key - normal mode,"
+		" hash mismatch but RO matches");
+	TEST_EQ(key_is_trusted, true, "Key is trusted (FWMP ignored in normal mode)");
+	clean();
+
+	// FWMP key matches but RO key doesn't match, dev mode disabled -> should not be trusted
+	// Setup RO key and AVB key as key 1 (matching)
+	TEST_EQ_S(setup(1), 0);
+
+	// Calculate hash of avb_key_data
+	TEST_EQ(vb2_hash_calculate(0, avb_key_data, avb_key_len, VB2_HASH_SHA256, &hash),
+		 VB2_SUCCESS, "Calculate key hash for test");
+	memcpy(fwmp->dev_key_hash, hash.sha256, sizeof(fwmp->dev_key_hash));
+	fwmp->crc8 = vb2_secdata_fwmp_crc(fwmp);
+
+	// Corrupt AVB key
+	avb_key_data[0] ^= 0xff;
+
+	// Set to normal mode
+	vb2_ctx->flags &= ~VB2_CONTEXT_DEVELOPER_MODE;
+	sd->flags &= ~VB2_SD_FLAG_DEV_MODE_ENABLED;
+	vb2_set_boot_mode(vb2_ctx);
+
+	ret = avb_ops->validate_vbmeta_public_key(avb_ops, avb_key_data, avb_key_len,
+						  NULL, 0, &key_is_trusted);
+	TEST_EQ(ret, AVB_IO_RESULT_OK, "validate_vbmeta_public_key - normal mode,"
+		" hash mismatch but RO matches");
+	TEST_EQ(key_is_trusted, false, "Key is not trusted (FWMP ignored in normal mode)");
+	clean();
+
+	// Reset state for other tests
+	memset(fwmp, 0, sizeof(*fwmp));
+	sd->status &= ~VB2_SD_STATUS_SECDATA_FWMP_INIT;
+}
+
 int main(int argc, char *argv[])
 {
 	struct vb2_kernel_params vb2_kp = {
@@ -466,6 +577,7 @@ int main(int argc, char *argv[])
 	avb_ops = vboot_avb_ops_new(vb2_ctx, &vb2_kp, &gptdata, NULL, "_a");
 
 	validate_vbmeta_public_key_tests(avb_ops);
+	validate_vbmeta_public_key_fwmp_tests(avb_ops);
 	read_from_partition_tests(avb_ops);
 	get_preload_partition_tests(avb_ops);
 	read_rollback_tests(avb_ops);

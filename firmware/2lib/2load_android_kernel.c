@@ -10,6 +10,7 @@
 #include "2common.h"
 #include "2load_android_kernel.h"
 #include "2misc.h"
+#include "2secdata.h"
 #include "cgptlib.h"
 #include "cgptlib_internal.h"
 #include "gpt_misc.h"
@@ -496,7 +497,8 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 		return VB2_ERROR_ANDROID_MEMORY_ALLOC;
 
 	avb_flags = AVB_SLOT_VERIFY_FLAGS_NONE;
-	if (!need_verification)
+	if (!need_verification &&
+	    !vb2_secdata_fwmp_get_flag(ctx, VB2_SECDATA_FWMP_DEV_USE_KEY_HASH))
 		avb_flags |= AVB_SLOT_VERIFY_FLAGS_ALLOW_VERIFICATION_ERROR;
 
 	VB2_ASSERT(boot_partitions[ARRAY_SIZE(boot_partitions) - 1] == NULL);
@@ -509,13 +511,16 @@ vb2_error_t vb2_load_android(struct vb2_context *ctx, GptData *gpt, GptEntry *en
 		sd->flags |= VB2_SD_FLAG_KERNEL_SIGNED;
 	}
 
-	/* Ignore verification errors in developer mode */
+	/* Allow verification errors in dev mode unless DEV_USE_KEY_HASH is set */
 	if (!need_verification) {
 		switch (result) {
-		case AVB_SLOT_VERIFY_RESULT_ERROR_VERIFICATION:
 		case AVB_SLOT_VERIFY_RESULT_ERROR_ROLLBACK_INDEX:
-		case AVB_SLOT_VERIFY_RESULT_ERROR_PUBLIC_KEY_REJECTED:
 			result = AVB_SLOT_VERIFY_RESULT_OK;
+			break;
+		case AVB_SLOT_VERIFY_RESULT_ERROR_VERIFICATION:
+		case AVB_SLOT_VERIFY_RESULT_ERROR_PUBLIC_KEY_REJECTED:
+			if (!vb2_secdata_fwmp_get_flag(ctx, VB2_SECDATA_FWMP_DEV_USE_KEY_HASH))
+				result = AVB_SLOT_VERIFY_RESULT_OK;
 			break;
 		default:
 			break;

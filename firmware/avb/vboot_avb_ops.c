@@ -292,10 +292,11 @@ static AvbIOResult read_rollback_index(AvbOps *ops,
 
 	struct vboot_avb_ctx *avbctx = user_data(ops);
 	struct vb2_shared_data *sd = vb2_get_sd(avbctx->vb2_ctx);
-	if (!(vb2api_gbb_get_flags(avbctx->vb2_ctx) & VB2_GBB_FLAG_DISABLE_ROLLBACK_CHECK))
-		*out_rollback_index = sd->kernel_version_secdata;
-	else
+	if (avbctx->vb2_ctx->boot_mode == VB2_BOOT_MODE_DEVELOPER ||
+	    (vb2api_gbb_get_flags(avbctx->vb2_ctx) & VB2_GBB_FLAG_DISABLE_ROLLBACK_CHECK))
 		*out_rollback_index = 0;
+	else
+		*out_rollback_index = sd->kernel_version_secdata;
 
 	return AVB_IO_RESULT_OK;
 }
@@ -358,6 +359,7 @@ static AvbIOResult validate_vbmeta_public_key(AvbOps *ops,
 {
 	struct vboot_avb_ctx *avbctx = user_data(ops);
 	struct vb2_shared_data *sd = vb2_get_sd(avbctx->vb2_ctx);
+	struct vb2_context *ctx = avbctx->vb2_ctx;
 	struct vb2_public_key kernel_key;
 	AvbRSAPublicKeyHeader h;
 	uint8_t *key_data;
@@ -367,6 +369,33 @@ static AvbIOResult validate_vbmeta_public_key(AvbOps *ops,
 	vb2_error_t rv;
 
 	*out_key_is_trusted = false;
+
+	if (ctx->boot_mode == VB2_BOOT_MODE_DEVELOPER &&
+	    vb2_secdata_fwmp_get_flag(ctx, VB2_SECDATA_FWMP_DEV_USE_KEY_HASH)) {
+		uint8_t *fwmp_dev_key_hash = vb2_secdata_fwmp_get_dev_key_hash(ctx);
+		if (fwmp_dev_key_hash == NULL) {
+			VB2_DEBUG("Couldn't retrieve developer key hash from FWMP.\n");
+			goto out;
+		}
+
+		struct vb2_hash hash;
+		rv = vb2_hash_calculate(vb2api_hwcrypto_allowed(ctx),
+					public_key_data, public_key_length,
+					VB2_HASH_SHA256, &hash);
+		if (rv != VB2_SUCCESS) {
+			VB2_DEBUG("Failed to calculate public key hash: %#x\n", rv);
+			goto out;
+		}
+
+		if (vb2_safe_memcmp(hash.sha256, fwmp_dev_key_hash, sizeof(hash.sha256)) == 0) {
+			VB2_DEBUG("Developer key hash matches FWMP.\n");
+			*out_key_is_trusted = true;
+		} else {
+			VB2_DEBUG("Developer key hash mismatch.\n");
+		}
+		goto out;
+	}
+
 	key_data = vb2_member_of(sd, sd->kernel_key_offset);
 	key_size = sd->kernel_key_size;
 	rv = vb2_unpack_key_buffer(&kernel_key, key_data, key_size);
