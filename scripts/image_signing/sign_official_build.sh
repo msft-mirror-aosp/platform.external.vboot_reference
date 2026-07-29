@@ -1082,8 +1082,12 @@ resign_minios_kernel() {
       return 1
     fi
 
-    # Assume this is a miniOS kernel.
-    local minios_kernel_version=$((KERNEL_VERSION >> 24))
+    # Extract data_key version from keyblock and calculate miniOS version floor.
+    local keyblock_info
+    keyblock_info="$(sudo_futility show -P "${keyblock}")"
+    local data_key_version
+    data_key_version="$(echo "${keyblock_info}" | sed -nE 's/.*keyblock::data_key::version::(.*)/\1/p')"
+    local minios_kernel_version=$((data_key_version >> 8))
     if sudo_futility vbutil_kernel --repack "${loop_minios}" \
         --keyblock "${keyblock}" \
         --signprivate "${priv_key}" \
