@@ -32,6 +32,16 @@ fi
 # Read it back?
 "${FUTILITY}" gbb -g "${TMP}.blob" | grep "0123456789ABCDE"
 
+# Test Smart Mode Inference (shorthand syntax without -g / -s)
+"${FUTILITY}" gbb --flags=0x12345678 "${TMP}.blob"
+"${FUTILITY}" gbb --flags "${TMP}.blob" | grep -i 0x12345678
+"${FUTILITY}" gbb --flags=+0x100 "${TMP}.blob"
+"${FUTILITY}" gbb --flags "${TMP}.blob" | grep -i 0x12345778
+"${FUTILITY}" gbb --flags=-0x10 "${TMP}.blob"
+"${FUTILITY}" gbb --flags "${TMP}.blob" | grep -i 0x12345768
+"${FUTILITY}" gbb --hwid="0123456789SHORT" "${TMP}.blob"
+"${FUTILITY}" gbb "${TMP}.blob" | grep "0123456789SHORT"
+
 # Same kind of tests for the other fields, but they need binary files.
 
 # too long

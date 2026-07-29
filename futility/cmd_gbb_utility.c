@@ -43,8 +43,8 @@ static void print_help(int argc, char *argv[])
 		"[image_file] [output_file]\n"
 		"\n"
 		"GET MODE:\n"
-		"-g, --get   (default)\tGet (read) from image_file or flash, "
-		"with following options:\n"
+		"-g, --get            \tGet (read) from image_file or flash (default),\n"
+		"                     \twith following options:\n"
 		FLASH_ARG_HELP
 		"     --hwid          \tReport hardware id (default).\n"
 		"     --flags         \tReport header flags.\n"
@@ -55,8 +55,9 @@ static void print_help(int argc, char *argv[])
 		" -e  --explicit      \tReport header flags by name.\n"
 		"\n"
 		"SET MODE:\n"
-		"-s, --set            \tSet (write) to flash or file, "
-		"with following options:\n"
+		"-s, --set            \tSet (write) to flash or file (inferred when\n"
+		"                     \t--flags=VAL or --hwid=VAL is given),\n"
+		"                     \twith following options:\n"
 		FLASH_ARG_HELP
 		" -o, --output=FILE   \tNew file name for ouptput.\n"
 		"     --hwid=HWID     \tThe new hardware id to be changed.\n"
@@ -75,14 +76,17 @@ static void print_help(int argc, char *argv[])
 		"\n"
 		FLASH_MORE_HELP
 		"SAMPLE:\n"
-		"  %s -g image.bin\n"
+		"  %s --flags\n"
+		"  %s --flags=0x18\n"
+		"  %s --flags image.bin\n"
+		"  %s --flags=0x18 image.bin\n"
 		"  %s --set --hwid='New Model' -k key.bin"
 		" image.bin newimage.bin\n"
 		"  %s -c 0x100,0x1000,0x03DE80,0x1000 gbb.blob\n\n"
 		"GBB Flags:\n"
 		" To get a developer-friendly device, try 0x18 (dev_mode boot_usb).\n"
 		" For early bringup development, try 0x40b9.\n",
-		argv[0], argv[0], argv[0], argv[0]);
+		argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
 	for (vb2_gbb_flags_t flag = 1; flag; flag <<= 1) {
 		const char *name;
 		const char *description;
@@ -114,8 +118,8 @@ static struct option long_opts[] = {
 	{"rootkey", 1, NULL, 'k'},
 	{"bmpfv", 1, NULL, 'b'},
 	{"recoverykey", 1, NULL, 'r'},
-	{"hwid", 0, NULL, OPT_HWID},
-	{"flags", 0, NULL, OPT_FLAGS},
+	{"hwid", 2, NULL, OPT_HWID},
+	{"flags", 2, NULL, OPT_FLAGS},
 	{"explicit", 0, NULL, 'e'},
 	{"digest", 0, NULL, OPT_DIGEST},
 	{"flash", 0, NULL, OPT_FLASH},
@@ -400,7 +404,7 @@ static int parse_flag_value(const char *s, vb2_gbb_flags_t *val)
 
 static int do_gbb(int argc, char *argv[])
 {
-	enum do_what_now { DO_GET, DO_SET, DO_CREATE } mode = DO_GET;
+	enum do_what_now { DO_UNKNOWN, DO_GET, DO_SET, DO_CREATE } mode = DO_UNKNOWN;
 	char *infile = NULL;
 	char *outfile = NULL;
 	char *opt_create = NULL;
@@ -516,6 +520,30 @@ static int do_gbb(int argc, char *argv[])
 		return 1;
 	}
 
+	/*
+	 * Smart Mode Inference: switch to DO_SET if setting values are provided;
+	 * default to DO_GET otherwise. Key import/export options are excluded as
+	 * they take a file argument in both modes.
+	 */
+	if (mode == DO_UNKNOWN) {
+		if (opt_flags || opt_hwid) {
+			mode = DO_SET;
+			VB2_DEBUG("Inferred DO_SET mode from provided setting values\n");
+		} else {
+			mode = DO_GET;
+			VB2_DEBUG("Inferred DO_GET mode (default)\n");
+		}
+	}
+
+	/*
+	 * Implicit Flash Target: if no input filename is specified and --flash
+	 * wasn't specified, default to --flash.
+	 */
+	if (!args.use_flash && argc - optind == 0) {
+		args.use_flash = 1;
+		VB2_DEBUG("Inferred live flash target (--flash)\n");
+	}
+
 	if (args.use_flash) {
 		if (setup_flash(&cfg, &args)) {
 			ERROR("While preparing flash\n");
@@ -545,8 +573,10 @@ static int do_gbb(int argc, char *argv[])
 
 		/* With no args, show the HWID */
 		if (!opt_rootkey && !opt_bmpfv && !opt_recoverykey
-		    && !sel_flags && !sel_digest)
+		    && !sel_flags && !sel_digest) {
 			sel_hwid = true;
+			VB2_DEBUG("Inferred HWID query mode (no specific query flags given)\n");
+		}
 
 		struct vb2_gbb_header *gbb = FindGbbHeader(inbuf, filesize);
 		if (!gbb) {
@@ -763,6 +793,10 @@ static int do_gbb(int argc, char *argv[])
 				errorcnt++;
 				break;
 			}
+		break;
+	case DO_UNKNOWN:
+		ERROR("Unknown mode\n");
+		errorcnt++;
 		break;
 	}
 
