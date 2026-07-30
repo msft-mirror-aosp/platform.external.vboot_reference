@@ -164,6 +164,56 @@ static char *determine_ifd_platform(const char *image_path)
 	return platform;
 }
 
+static bool is_gpr0_enabled(struct updater_config *cfg)
+{
+	char buffer[256];
+	struct subprocess_target output = {
+		.type = TARGET_BUFFER_NULL_TERMINATED,
+		.buffer = {
+			.buf = buffer,
+			.size = sizeof(buffer),
+		},
+	};
+	const char *temp_path;
+	char *platform;
+	bool is_enabled = false;
+
+	temp_path = get_firmware_image_temp_file(&cfg->image_current, &cfg->tempfiles);
+	if (!temp_path)
+		return false;
+
+	platform = determine_ifd_platform(temp_path);
+	if (!platform)
+		return false;
+
+	const char *const argv[] = {
+		"ifdtool", "-p", platform, "-c", temp_path, NULL,
+	};
+	if (subprocess_run(argv, &subprocess_null, &output, &subprocess_null) == 0 &&
+	    strstr(buffer, "GPR0 status: Enabled"))
+		is_enabled = true;
+
+	VB2_DEBUG("GPR0 status for '%s': %s\n", platform, is_enabled ? "enabled" : "disabled");
+
+	free(platform);
+	return is_enabled;
+}
+
+bool is_csme_locked(struct updater_config *cfg)
+{
+	if (is_flash_descriptor_locked(&cfg->image_current)) {
+		VB2_DEBUG("Flash descriptor (FLMSTR1) is locked.\n");
+		return true;
+	}
+
+	if (is_gpr0_enabled(cfg)) {
+		VB2_DEBUG("Intel CSME GPR0 protection is enabled.\n");
+		return true;
+	}
+
+	return false;
+}
+
 /*
  * Run ifdtool with the given option.
  *
@@ -237,6 +287,11 @@ int unlock_csme(struct updater_config *cfg)
 		goto cleanup;
 	}
 
+	/*
+	 * TODO(b:540693049): In a following patch, consider checking GPR0
+	 * status as well to verify both FLMSTR1 and GPR0 are unlocked after
+	 * running ifdtool.
+	 */
 	/* Double check the descriptor was actually unlocked */
 	if (is_flash_descriptor_locked(&cfg->image)) {
 		ERROR("Descriptor is still locked after running ifdtool\n");

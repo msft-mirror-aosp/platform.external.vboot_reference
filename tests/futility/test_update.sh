@@ -714,6 +714,20 @@ unlock_me() {
   ifdtool -p adl --gpr0-disable "${image}.tmp" -O "${image}"
 }
 
+lock_flmstr() {
+  local image="$1"
+
+  ifdtool -p adl --lock "${image}" -O "${image}.tmp"
+  mv -f "${image}.tmp" "${image}"
+}
+
+lock_gpr0() {
+  local image="$1"
+
+  ifdtool -p adl --gpr0-enable "${image}" -O "${image}.tmp"
+  mv -f "${image}.tmp" "${image}"
+}
+
 test_ifdtool() {
   cp -f "${FROM_IMAGE}" "${FROM_IMAGE}.locked"
   lock_me "${FROM_IMAGE}.locked"
@@ -741,6 +755,61 @@ test_ifdtool() {
   test_update "AP RO locked update (unlocked)" \
     "${FROM_IMAGE}.unlocked" "${EXPECTED}/full" \
     -i "${TO_IMAGE}" --wp=0 --debug
+
+  # Test auto-preserving ME: both FLMSTR1 and GPR0 locked.
+  cp -f "${FROM_DIFFERENT_ME_IMAGE}" "${FROM_DIFFERENT_ME_IMAGE}.locked"
+  lock_me "${FROM_DIFFERENT_ME_IMAGE}.locked"
+  cp -f "${EXPECTED}/me_preserved" "${EXPECTED}/me_preserved.locked"
+  lock_me "${EXPECTED}/me_preserved.locked"
+
+  test_update "Full update (locked CSME, auto-preserve SI_DESC and SI_ME)" \
+    "${FROM_DIFFERENT_ME_IMAGE}.locked" "${EXPECTED}/me_preserved.locked" \
+    -i "${TO_IMAGE}.locked" --wp=0 --debug
+
+  test_update "Full update (locked CSME with non-host programmer)" \
+    "${FROM_DIFFERENT_ME_IMAGE}.locked" "${EXPECTED}/full.locked" \
+    -i "${TO_IMAGE}.locked" --wp=0 --debug \
+    -p raiden_debug_spi:target=AP
+
+  # Test auto-preserving ME: GPR0 enabled only (FLMSTR1 unlocked).
+  local from_diff_me_gpr0="${FROM_DIFFERENT_ME_IMAGE}.gpr0"
+  cp -f "${FROM_DIFFERENT_ME_IMAGE}" "${from_diff_me_gpr0}"
+  unlock_me "${from_diff_me_gpr0}"
+  lock_gpr0 "${from_diff_me_gpr0}"
+
+  local to_gpr0="${TO_IMAGE}.gpr0"
+  cp -f "${TO_IMAGE}" "${to_gpr0}"
+  unlock_me "${to_gpr0}"
+  lock_gpr0 "${to_gpr0}"
+
+  local expected_me_preserved_gpr0="${EXPECTED}/me_preserved.gpr0"
+  cp -f "${EXPECTED}/me_preserved" "${expected_me_preserved_gpr0}"
+  unlock_me "${expected_me_preserved_gpr0}"
+  lock_gpr0 "${expected_me_preserved_gpr0}"
+
+  test_update "Full update (GPR0 enabled, auto-preserve SI_DESC and SI_ME)" \
+    "${from_diff_me_gpr0}" "${expected_me_preserved_gpr0}" \
+    -i "${to_gpr0}" --wp=0 --debug
+
+  # Test auto-preserving ME: FLMSTR1 locked only (GPR0 disabled).
+  local from_diff_me_flmstr="${FROM_DIFFERENT_ME_IMAGE}.flmstr"
+  cp -f "${FROM_DIFFERENT_ME_IMAGE}" "${from_diff_me_flmstr}"
+  unlock_me "${from_diff_me_flmstr}"
+  lock_flmstr "${from_diff_me_flmstr}"
+
+  local to_flmstr="${TO_IMAGE}.flmstr"
+  cp -f "${TO_IMAGE}" "${to_flmstr}"
+  unlock_me "${to_flmstr}"
+  lock_flmstr "${to_flmstr}"
+
+  local expected_me_preserved_flmstr="${EXPECTED}/me_preserved.flmstr"
+  cp -f "${EXPECTED}/me_preserved" "${expected_me_preserved_flmstr}"
+  unlock_me "${expected_me_preserved_flmstr}"
+  lock_flmstr "${expected_me_preserved_flmstr}"
+
+  test_update "Full update (FLMSTR1 locked, auto-preserve SI_DESC and SI_ME)" \
+    "${from_diff_me_flmstr}" "${expected_me_preserved_flmstr}" \
+    -i "${to_flmstr}" --wp=0 --debug
 
   # Generate images for testing --unlock_me.
   # There are two ways to detect the platform:

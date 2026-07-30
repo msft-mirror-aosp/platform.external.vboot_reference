@@ -219,22 +219,6 @@ static int setup_config_quirks(const char *quirks, struct updater_config *cfg)
 	return r;
 }
 
-/*
- * Checks if the section is filled with given character.
- * If section size is 0, return 0. If section is not empty, return non-zero if
- * the section is filled with same character c, otherwise 0.
- */
-static int section_is_filled_with(const struct firmware_section *section,
-				  uint8_t c)
-{
-	uint32_t i;
-	if (!section->size)
-		return 0;
-	for (i = 0; i < section->size; i++)
-		if (section->data[i] != c)
-			return 0;
-	return 1;
-}
 
 /*
  * Decides which target in RW firmware to manipulate.
@@ -390,23 +374,27 @@ static int preserve_management_engine(struct updater_config *cfg,
 		VB2_DEBUG("Skipped because no section %s.\n", FMAP_SI_ME);
 		return 0;
 	}
-	if (section_is_filled_with(&section, 0xFF)) {
-		VB2_DEBUG("ME is probably locked - preserving %s.\n",
-			  FMAP_SI_DESC);
-		return preserve_firmware_section(
-				image_from, image_to, FMAP_SI_DESC);
+	if (cfg->dut_is_remote) {
+		VB2_DEBUG("Flashing a remote DUT - no need to preserve ME.\n");
+		return 0;
 	}
 
-	if (!strcmp(cfg->original_programmer, FLASHROM_PROGRAMMER_INTERNAL_AP)) {
-		if (try_apply_quirk(QUIRK_PRESERVE_ME, cfg) > 0) {
-			VB2_DEBUG("ME needs to be preserved - preserving %s.\n",
-				  FMAP_SI_ME);
-			return preserve_firmware_section(image_from, image_to,
-							 FMAP_SI_ME);
-		}
-	} else {
-		VB2_DEBUG("Flashing via non-host programmer %s - no need to "
-			  "preserve ME.\n", image_from->programmer);
+	if (is_csme_locked(cfg)) {
+		int errcnt = 0;
+
+		INFO("CSME is locked by hardware (GPR0/FLMSTR). Preserving ME.\n");
+		if (preserve_firmware_section(image_from, image_to, FMAP_SI_DESC))
+			errcnt++;
+		if (preserve_firmware_section(image_from, image_to, FMAP_SI_ME))
+			errcnt++;
+		return errcnt ? -1 : 0;
+	}
+
+	if (try_apply_quirk(QUIRK_PRESERVE_ME, cfg) > 0) {
+		VB2_DEBUG("ME needs to be preserved - preserving %s.\n",
+			  FMAP_SI_ME);
+		return preserve_firmware_section(image_from, image_to,
+						 FMAP_SI_ME);
 	}
 
 	return 0;
@@ -563,6 +551,10 @@ static bool is_ap_ro_locked_with_verification(struct updater_config *cfg)
 		VB2_DEBUG("%s is exactly the same. RO update should be fine.\n", FMAP_SI_DESC);
 		return false;
 	}
+	/*
+	 * TODO(b:540693049): In a following patch, consider checking
+	 * is_csme_locked(cfg) to account for GPR0 status as well.
+	 */
 	return is_flash_descriptor_locked(current);
 }
 
