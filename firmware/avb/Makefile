@@ -21,12 +21,14 @@ LIBAVB_SRCS += \
 	${LIBAVB_SRCDIR}/libavb/avb_hash_descriptor.c \
 	${LIBAVB_SRCDIR}/libavb/avb_hashtree_descriptor.c \
 	${LIBAVB_SRCDIR}/libavb/avb_kernel_cmdline_descriptor.c \
+	${LIBAVB_SRCDIR}/libavb/avb_mldsa.c \
 	${LIBAVB_SRCDIR}/libavb/avb_property_descriptor.c \
 	${LIBAVB_SRCDIR}/libavb/avb_rsa.c \
 	${LIBAVB_SRCDIR}/libavb/avb_slot_verify.c \
 	${LIBAVB_SRCDIR}/libavb/avb_util.c \
 	${LIBAVB_SRCDIR}/libavb/avb_vbmeta_image.c \
 	${LIBAVB_SRCDIR}/libavb/avb_version.c \
+	${LIBAVB_SRCDIR}/libavb/crypto/mldsa_impl.c \
 	${LIBAVB_SRCDIR}/libavb/crypto/sha512_impl.c
 
 ifneq ($(strip $(filter-out 0,${X86_SHA_EXT} ${ARMV8_CRYPTO_EXT})),)
