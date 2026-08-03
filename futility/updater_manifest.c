@@ -78,13 +78,11 @@ static void str_convert(char *s, int (*convert)(int c))
 /* Returns the VPD value by given key name, or NULL on error (or no value). */
 static char *vpd_get_value(const char *fpath, const char *key)
 {
-	char *command, *result;
+	char *result;
 
 	assert(fpath);
-	ASPRINTF(&command, "vpd -g %s -f %s 2>/dev/null", key, fpath);
-	result = host_shell(command);
-	free(command);
-
+	const char *const argv[] = {"vpd", "-g", key, "-f", fpath, NULL};
+	result = host_exec_output(argv);
 	if (result && !*result) {
 		free(result);
 		result = NULL;

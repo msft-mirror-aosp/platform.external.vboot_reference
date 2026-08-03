@@ -19,6 +19,7 @@
 #include "2common.h"
 #include "futility.h"
 #include "host_misc.h"
+#include "subprocess.h"
 #include "updater_archive.h"
 #include "updater_utils.h"
 
@@ -135,12 +136,21 @@ static int archive_fallback_write_file(void *handle, const char *fname,
 	if (strchr(path, '/')) {
 		char *dirname = strdup(path);
 		*strrchr(dirname, '/') = '\0';
-		/* TODO(hungte): call mkdir(2) instead of shell invocation. */
-		if (access(dirname, W_OK) != 0) {
-			char *command;
-			ASPRINTF(&command, "mkdir -p %s", dirname);
-			free(host_shell(command));
-			free(command);
+		/*
+		 * If path is in the root directory (e.g. "/foo"), dirname
+		 * becomes "" after truncation. Root directory already exists
+		 * and does not need to be created.
+		 */
+		/* TODO(hungte): call mkdir(2) instead of subprocess invocation. */
+		if (*dirname && access(dirname, W_OK) != 0) {
+			const char *const argv[] = {"mkdir", "-p", dirname, NULL};
+			if (subprocess_run(argv, &subprocess_null, &subprocess_null,
+					   &subprocess_null) != 0) {
+				ERROR("Failed to create directory %s\n", dirname);
+				free(dirname);
+				free(temp_path);
+				return 1;
+			}
 		}
 		free(dirname);
 	}

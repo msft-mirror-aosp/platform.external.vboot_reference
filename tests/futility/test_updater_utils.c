@@ -572,12 +572,27 @@ static enum unit_result test_misc(void)
 	updater_delete_config(cfg);
 	cfg = NULL;
 
-	res_shell = host_shell("echo test");
-	TEST_STR_EQ(res_shell, "test", "Host shell: echo");
+	const char *const argv_echo[] = {"echo", "test", NULL};
+	res_shell = host_exec_output(argv_echo);
+	TEST_STR_EQ(res_shell, "test", "Host exec output: echo");
 	free(res_shell);
 
-	res_shell = host_shell(")certainly_not_a_valid_thing");
-	TEST_STR_EQ(res_shell, "", "Host shell: invalid command");
+	const char *const argv_empty[] = {"true", NULL};
+	res_shell = host_exec_output(argv_empty);
+	TEST_STR_EQ(res_shell, "", "Host exec output: empty");
+	free(res_shell);
+
+	const char *const argv_spaces[] = {
+		"echo", "hello world; test 'quoted' $VAR", NULL
+	};
+	res_shell = host_exec_output(argv_spaces);
+	TEST_STR_EQ(res_shell, "hello world; test 'quoted' $VAR",
+		    "Host exec output: special chars");
+	free(res_shell);
+
+	const char *const argv_invalid[] = {")certainly_not_a_valid_thing", NULL};
+	res_shell = host_exec_output(argv_invalid);
+	TEST_PTR_EQ(res_shell, NULL, "Host exec output: invalid command");
 	free(res_shell);
 
 	model = get_model_from_frid("some.frid");

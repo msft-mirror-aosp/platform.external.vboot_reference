@@ -16,6 +16,7 @@
 #include "futility.h"
 #include "host_misc.h"
 #include "platform_csme.h"
+#include "subprocess.h"
 #include "updater.h"
 
 struct quirks_record {
@@ -174,7 +175,6 @@ static int quirk_eve_smm_store(struct updater_config *cfg)
 {
 	const char *smm_store_name = "smm_store";
 	const char *old_store;
-	char *command;
 	const char *temp_image = get_firmware_image_temp_file(
 			&cfg->image_current, &cfg->tempfiles);
 
@@ -198,15 +198,31 @@ static int quirk_eve_smm_store(struct updater_config *cfg)
 	if (!temp_image)
 		return -1;
 
-	/* crosreview.com/1165109: The offset is fixed at 0x1bf000. */
-	ASPRINTF(&command,
-		 "cbfstool \"%s\" remove -r %s -n \"%s\" 2>/dev/null; "
-		 "cbfstool \"%s\" add -r %s -n \"%s\" -f \"%s\" "
-		 " -t raw -b 0x1bf000", temp_image, FMAP_RW_LEGACY,
-		 smm_store_name, temp_image, FMAP_RW_LEGACY,
-		 smm_store_name, old_store);
-	free(host_shell(command));
-	free(command);
+	/*
+	 * https://crrev.com/c/1165109: The offset is fixed at 0x1bf000.
+	 * Remove old SMM store if present. Ignore exit code > 0 (file not
+	 * found), but abort on execution error (< 0).
+	 */
+	const char *const rm_argv[] = {
+		"cbfstool", temp_image, "remove", "-r", FMAP_RW_LEGACY,
+		"-n", smm_store_name, NULL
+	};
+	if (subprocess_run(rm_argv, &subprocess_null, &subprocess_null,
+			   &subprocess_null) < 0) {
+		ERROR("Failed to execute cbfstool remove.\n");
+		return -1;
+	}
+
+	const char *const add_argv[] = {
+		"cbfstool", temp_image, "add", "-r", FMAP_RW_LEGACY,
+		"-n", smm_store_name, "-f", old_store, "-t", "raw",
+		"-b", "0x1bf000", NULL
+	};
+	if (subprocess_run(add_argv, &subprocess_null, &subprocess_null,
+			   &subprocess_null) != 0) {
+		ERROR("Failed to re-add SMM store to image.\n");
+		return -1;
+	}
 
 	return reload_firmware_image(temp_image, &cfg->image);
 }

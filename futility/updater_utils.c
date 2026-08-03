@@ -19,6 +19,7 @@
 #include "2common.h"
 #include "cbfstool.h"
 #include "host_misc.h"
+#include "subprocess.h"
 #include "util_misc.h"
 #include "updater.h"
 
@@ -473,46 +474,49 @@ bool is_ec_write_protection_enabled(struct updater_config *cfg)
 }
 
 test_mockable
-char *host_shell(const char *command)
+char *host_exec_output(const char *const argv[])
 {
+	assert(argv && *argv);
+
 	/* Currently all commands we use do not have large output. */
 	char buf[COMMAND_BUFFER_SIZE];
+	struct subprocess_target output = {
+		.type = TARGET_BUFFER_NULL_TERMINATED,
+		.buffer = {
+			.buf = buf,
+			.size = sizeof(buf),
+		},
+	};
 
-	int result;
-	FILE *fp = popen(command, "r");
-
-	VB2_DEBUG("%s\n", command);
 	buf[0] = '\0';
-	if (!fp) {
-		VB2_DEBUG("Execution error for %s.\n", command);
+	int status = subprocess_run(argv, &subprocess_null, &output,
+				    &subprocess_null);
+	if (status == 0) {
+		strip_string(buf, NULL);
 		return strdup(buf);
 	}
 
-	if (fgets(buf, sizeof(buf), fp))
-		strip_string(buf, NULL);
-	result = pclose(fp);
-	if (!WIFEXITED(result) || WEXITSTATUS(result) != 0) {
-		VB2_DEBUG("Execution failure with exit code %d: %s\n",
-			  WEXITSTATUS(result), command);
-		/*
-		 * Discard all output if command failed, for example command
-		 * syntax failure may lead to garbage in stdout.
-		 */
-		buf[0] = '\0';
-	}
-	return strdup(buf);
+	if (status < 0)
+		ERROR("Execution error %d for command: %s\n",
+		      status, argv[0] ? argv[0] : "");
+	else
+		VB2_DEBUG("Command %s exited with status %d\n",
+			  argv[0] ? argv[0] : "", status);
+
+	return NULL;
 }
 
 test_mockable
 void prepare_servo_control(const char *control_name, bool on)
 {
-	char *cmd;
+	char *arg;
 	if (!control_name)
 		return;
 
-	ASPRINTF(&cmd, "dut-control %s:%s", control_name, on ? "on" : "off");
-	free(host_shell(cmd));
-	free(cmd);
+	ASPRINTF(&arg, "%s:%s", control_name, on ? "on" : "off");
+	const char *const argv[] = {"dut-control", arg, NULL};
+	free(host_exec_output(argv));
+	free(arg);
 }
 
 test_mockable
@@ -521,7 +525,8 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 	const char *servo_port = getenv(ENV_SERVOD_PORT);
 	const char *servo_name = getenv(ENV_SERVOD_NAME);
 	const char *servo_id = servo_port, *servo_id_type = ENV_SERVOD_PORT;
-	char *servo_type = host_shell("dut-control -o servo_type 2>/dev/null");
+	const char *const type_argv[] = {"dut-control", "-o", "servo_type", NULL};
+	char *servo_type = host_exec_output(type_argv);
 	const char *programmer = NULL;
 	char *ret = NULL;
 	char *servo_serial = NULL;
@@ -529,11 +534,11 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 	static const char * const raiden_debug_spi = "raiden_debug_spi";
 	static const char * const cpu_fw_spi = "cpu_fw_spi";
 	static const char * const ccd_cpu_fw_spi = "ccd_cpu_fw_spi";
-	const char *serial_cmd = "dut-control -o serialname 2>/dev/null";
+	const char *serial_name = "serialname";
 
 	/* By default, no control is needed. */
 	*prepare_ctrl_name = NULL;
-	VB2_DEBUG("servo_type: %s\n", servo_type);
+	VB2_DEBUG("servo_type: %s\n", servo_type ? servo_type : "<null>");
 
 	/* dut-control defaults to port 9999, or non-empty servo_name. */
 	if (!servo_id || !*servo_id) {
@@ -547,7 +552,7 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 	assert(servo_id && *servo_id);
 
 	/* servo_type names: chromite/lib/firmware/servo_lib.py */
-	if (!*servo_type) {
+	if (!servo_type || !*servo_type) {
 		ERROR("Failed to get servo type. Check servod.\n");
 	} else if (strcmp(servo_type, "servo_v2") == 0) {
 		VB2_DEBUG("Selected Servo V2.\n");
@@ -557,15 +562,14 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 		VB2_DEBUG("Selected Servo Micro.\n");
 		programmer = raiden_debug_spi;
 		*prepare_ctrl_name = cpu_fw_spi;
-		serial_cmd = ("dut-control -o servo_micro_serialname"
-			" 2>/dev/null");
+		serial_name = "servo_micro_serialname";
 	} else if (strstr(servo_type, "ccd_cr50") ||
 		   strstr(servo_type, "ccd_gsc") ||
 		   strstr(servo_type, "ccd_ti50")) {
 		VB2_DEBUG("Selected CCD.\n");
 		programmer = "raiden_debug_spi:target=AP,custom_rst=true";
 		*prepare_ctrl_name = ccd_cpu_fw_spi;
-		serial_cmd = "dut-control -o ccd_serialname 2>/dev/null";
+		serial_name = "ccd_serialname";
 	} else if (strstr(servo_type, "c2d2")) {
 		/* Most C2D2 devices don't support flashing AP, so this must
 		 * come after CCD.
@@ -573,8 +577,7 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 		VB2_DEBUG("Selected C2D2.\n");
 		programmer = raiden_debug_spi;
 		*prepare_ctrl_name = cpu_fw_spi;
-		serial_cmd = ("dut-control -o c2d2_serialname"
-			" 2>/dev/null");
+		serial_name = "c2d2_serialname";
 	} else {
 		WARN("Unknown servo: %s\nAssuming debug header.\n", servo_type);
 		programmer = raiden_debug_spi;
@@ -586,20 +589,20 @@ char *host_detect_servo(const char **prepare_ctrl_name)
 	 * should always try to get the serial number.
 	 */
 	VB2_DEBUG("Select servod by %s=%s\n", servo_id_type, servo_id);
-	servo_serial = host_shell(serial_cmd);
-	VB2_DEBUG("Servo SN=%s (serial cmd: %s)\n", servo_serial, serial_cmd);
-	if (!(servo_serial && *servo_serial)) {
+	const char *const serial_argv[] = {
+		"dut-control", "-o", serial_name, NULL
+	};
+	servo_serial = host_exec_output(serial_argv);
+	VB2_DEBUG("Servo SN=%s (serial name: %s)\n",
+		  servo_serial ? servo_serial : "<null>", serial_name);
+	if (!servo_serial || !*servo_serial) {
 		ERROR("Failed to get serial: %s=%s\n", servo_id_type, servo_id);
 		/* If there is no servo serial, undo the prepare_ctrl_name. */
 		*prepare_ctrl_name = NULL;
 	} else if (programmer) {
-		if (!servo_serial) {
-			ret = strdup(programmer);
-		} else {
-			const char prefix = strchr(programmer, ':') ? ',' : ':';
-			ASPRINTF(&ret, "%s%cserial=%s", programmer, prefix,
-				 servo_serial);
-		}
+		const char prefix = strchr(programmer, ':') ? ',' : ':';
+		ASPRINTF(&ret, "%s%cserial=%s", programmer, prefix,
+			 servo_serial);
 		VB2_DEBUG("Servo programmer: %s\n", ret);
 	}
 

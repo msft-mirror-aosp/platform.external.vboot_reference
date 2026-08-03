@@ -199,10 +199,10 @@ bool is_ec_write_protection_enabled(struct updater_config *cfg);
 
 /*
  * Executes a command on current host and returns stripped command output.
- * If the command has failed (exit code is not zero), returns an empty string.
+ * Returns NULL if the command failed to execute or exited with a non-zero status.
  * The caller is responsible for releasing the returned string.
  */
-char *host_shell(const char *command);
+char *host_exec_output(const char *const argv[]);
 
 /* The environment variable name for setting servod port. */
 #define ENV_SERVOD_PORT	"SERVOD_PORT"
