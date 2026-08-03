@@ -10,6 +10,7 @@
 
 #include "cbfstool.h"
 #include "platform_csme.h"
+#include "subprocess.h"
 #include "updater.h"
 
 /* Structure from coreboot util/ifdtool/ifdtool.h */
@@ -164,24 +165,28 @@ static char *determine_ifd_platform(const char *image_path)
 }
 
 /*
- * Run ifdtool with the given options.
+ * Run ifdtool with the given option.
+ *
+ * Note that extra_option must be a single option flag (e.g., "-u" or "-g")
+ * and not multiple space-separated flags.
  *
  * Returns 0 on success, otherwise failure.
  */
-static int run_ifdtool(const char *image_path, char *platform, const char *extra_options)
+static int run_ifdtool(const char *image_path, const char *platform,
+		       const char *extra_option)
 {
-	char *command;
-	int ret = 0;
-
-	ASPRINTF(&command, "ifdtool -p \"%s\" -O \"%s\" \"%s\" %s 2>&1",
-		 platform, image_path, image_path, extra_options);
-	if (system(command)) {
-		ERROR("Failed to run: %s\n", command);
-		ret = -1;
+	const char *const argv[] = {
+		"ifdtool", "-p", platform, "-O", image_path,
+		image_path, extra_option, NULL
+	};
+	int status = subprocess_run(argv, &subprocess_null, NULL, NULL);
+	if (status) {
+		ERROR("Failed to run ifdtool -p %s %s: status %d\n",
+		      platform, extra_option, status);
+		return -1;
 	}
 
-	free(command);
-	return ret;
+	return 0;
 }
 
 /*
