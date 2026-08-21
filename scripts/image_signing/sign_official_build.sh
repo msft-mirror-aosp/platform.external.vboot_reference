@@ -462,6 +462,199 @@ resign_firmware_payload() {
   return "${ret}"
 }
 
+# Print the MD5 checksum of a file with a given message prefix.
+# Args: MESSAGE FILE_PATH
+echo_file_md5() {
+  local msg="$1"
+  local file_path="$2"
+  local md5
+  md5="$(md5sum "${file_path}" | awk '{print $1}')"
+  echo "${msg}: md5 = ${md5}"
+}
+
+# Resign ec.bin and store EC_RW.bin and its hash in bios.bin CBFS.
+# Args: BIOS_PATH EC_PATH
+sign_ec_rw() {
+  local bios_path="$1"
+  local ec_path="$2"
+
+  if ! is_ec_rw_signed "${ec_path}"; then
+    return 0
+  fi
+
+  local rw_bin="EC_RW.bin"
+  local rw_hash="EC_RW.hash"
+  # futility writes byproduct files to CWD, so we cd to temp dir.
+  pushd "$(make_temp_dir)" > /dev/null
+  local full_command=(
+    do_futility sign
+    --type rwsig
+    --prikey "${KEYCFG_KEY_EC_EFS_VBPRIK2}"
+    --ecrw_out "${rw_bin}"
+    "${ec_path}"
+  )
+  echo "Signing EC with: ${full_command[*]}"
+  "${full_command[@]}" || die "Failed to sign ${ec_path}"
+  # Above command produces EC_RW.bin. Compute its hash.
+  openssl dgst -sha256 -binary "${rw_bin}" > "${rw_hash}"
+  # Store EC_RW.bin and its hash in bios.bin.
+  store_file_in_cbfs "${bios_path}" "${rw_bin}" "ecrw" \
+    || die "Failed to store file in ${bios_path}"
+  store_file_in_cbfs "${bios_path}" "${rw_hash}" "ecrw.hash" \
+    || die "Failed to store file in ${bios_path}"
+  popd > /dev/null
+  info "Signed EC image output to ${ec_path}"
+
+  echo_file_md5 "After EC signing ${bios_path}" "${bios_path}"
+}
+
+# Resign a BIOS image and set GBB keys (handling LOEM keys if loem.ini is present).
+# Args: OUTPUT_NAME BIOS_PATH KEY_ID SHELLBALL_KEYSET_DIR
+sign_bios() {
+  local output_name="$1"
+  local bios_path="$2"
+  local key_id="$3"
+  local shellball_keyset_dir="$4"
+
+  local extra_args=()
+  local rootkey signprivate keyblock temp_fw full_command
+
+  rootkey="$(get_root_key_vbpubk)"
+
+  if [[ -e "${KEY_DIR}/loem.ini" ]]; then
+    local match
+    local key_index
+
+    # loem.ini has the format KEY_ID_VALUE = KEY_INDEX
+    if ! match="$(grep -E "^[0-9]+ *= *${key_id}$" "${KEY_DIR}/loem.ini")"; then
+      die "The loem key_id ${key_id} not found in loem.ini! (${KEY_DIR}/loem.ini)"
+    fi
+
+    # shellcheck disable=SC2001
+    key_index="$(echo "${match}" | sed 's/ *= *.*$//g')"
+    info "Detected key index from loem.ini as ${key_index} for ${key_id}"
+    if [[ -z "${key_index}" ]]; then
+      die "Failed to extract key_index ${key_id} in loem.ini file for ${output_name}"
+    fi
+
+    extra_args+=(
+      --loemdir "${shellball_keyset_dir}"
+      --loemid "${output_name}"
+    )
+    rootkey="$(get_root_key_vbpubk "${key_index}")"
+    cp "${rootkey}" "${shellball_keyset_dir}/rootkey.${output_name}"
+  fi
+
+  info "Using root key: ${rootkey##*/}"
+
+  temp_fw="$(make_temp_file)"
+  signprivate="$(get_firmware_vbprivk "${key_index}")"
+  keyblock="$(get_firmware_keyblock "${key_index}")"
+
+  # Resign bios.bin.
+  full_command=(
+    do_futility sign
+    --signprivate "${signprivate}"
+    --keyblock "${keyblock}"
+    --kernelkey "${KEYCFG_KERNEL_SUBKEY_VBPUBK}"
+    --version "${FIRMWARE_VERSION}"
+    "${extra_args[@]}"
+    "${bios_path}"
+    "${temp_fw}"
+  )
+  echo "Signing BIOS for ${output_name} with: ${full_command[*]}"
+  "${full_command[@]}" || die "Failed to sign BIOS for ${output_name}"
+
+  echo_file_md5 "After BIOS signing ${temp_fw}" "${temp_fw}"
+
+  # For development phases, when the GBB can be updated still, set the
+  # recovery and root keys in the image.
+  full_command=(
+    do_futility gbb
+    -s
+    --recoverykey="${KEYCFG_RECOVERY_KEY_VBPUBK}"
+    --rootkey="${rootkey}"
+    "${temp_fw}"
+    "${bios_path}"
+  )
+  echo "Setting GBB on ${bios_path} with: ${full_command[*]}"
+  "${full_command[@]}" || die "Failed to set GBB on ${bios_path}"
+
+  echo_file_md5 "After setting GBB on ${bios_path}" "${bios_path}"
+}
+
+# Sign RO_GSCVD FMAP section if present.
+# Args: OUTPUT_NAME BIOS_PATH BRAND_CODE SHELLBALL_KEYSET_DIR IS_GUYBRUSH
+sign_gscvd() {
+  local output_name="$1"
+  local bios_path="$2"
+  local brand_code="$3"
+  local shellball_keyset_dir="$4"
+  local is_guybrush="$5"
+
+  if [[ "${is_guybrush}" == "true" ]]; then
+    echo "Not looking for RO_GSCVD on guybrush, b/263378945"
+  elif futility dump_fmap -p "${bios_path}" | grep -q RO_GSCVD; then
+    if [[ -z "${brand_code}" ]]; then
+      die "No brand code for ${bios_path} in signer_config.csv"
+    fi
+
+    local arv_root="${KEYCFG_ARV_ROOT_VBPUBK}"
+    if [[ ! -f "${arv_root}" ]]; then
+      die "No AP RO verification keys, could not create RO_GSCVD"
+    fi
+
+    # Resign the RO_GSCVD FMAP area.
+    local full_command=(
+      do_futility gscvd
+      --keyblock "${KEYCFG_ARV_PLATFORM_KEYBLOCK}"
+      --platform_priv "${KEYCFG_ARV_PLATFORM_VBPRIVK}"
+      --board_id "${brand_code}"
+      --root_pub_key "${arv_root}"
+      "${bios_path}"
+    )
+    if [[ -n "${shellball_keyset_dir}" ]]; then
+      full_command+=(
+        --gscvd_out
+        "${shellball_keyset_dir}/gscvd.${output_name}"
+      )
+    fi
+    echo "Setting RO_GSCVD for ${output_name} with: ${full_command[*]}"
+    "${full_command[@]}" || die "Failed to sign RO_GSCVD for ${output_name}"
+
+    echo_file_md5 "After signing RO_GSCVD on ${bios_path}" "${bios_path}"
+  else
+    echo "No RO_GSCVD section in the image, skipping AP RO signing"
+  fi
+}
+
+# Resign a firmware image for a specific model: EC RW, BIOS, and RO_GSCVD.
+# Args: OUTPUT_NAME BIOS_PATH EC_PATH KEY_ID BRAND_CODE SHELLBALL_KEYSET_DIR IS_GUYBRUSH
+resign_firmware_image() {
+  local output_name="$1"
+  local bios_path="$2"
+  local ec_path="$3"
+  local key_id="$4"
+  local brand_code="$5"
+  local shellball_keyset_dir="$6"
+  local is_guybrush="$7"
+
+  info "Signing firmware image $(basename "${bios_path}") for ${output_name}"
+
+  echo_file_md5 "Initial ${bios_path}" "${bios_path}"
+
+  if [[ -n "${ec_path}" ]]; then
+    sign_ec_rw "${bios_path}" "${ec_path}"
+  fi
+
+  sign_bios "${output_name}" "${bios_path}" "${key_id}" \
+    "${shellball_keyset_dir}"
+  sign_gscvd "${output_name}" "${bios_path}" "${brand_code}" \
+    "${shellball_keyset_dir}" "${is_guybrush}"
+
+  info "Signed firmware image output to ${bios_path}"
+}
+
 # Re-sign the firmware AU payload provided with a new key.
 # Args: firmware_bundle
 resign_firmware_shellball() {
@@ -502,173 +695,29 @@ resign_firmware_shellball() {
   if [[ -e "${signer_config}" ]]; then
     info "Using signer_config.csv to determine firmware signatures"
     info "See go/cros-unibuild-signing for details"
+
+    if [[ -e "${KEY_DIR}/loem.ini" ]]; then
+      shellball_keyset_dir="${shellball_dir}/keyset"
+      mkdir -p "${shellball_keyset_dir}"
+    fi
+
+    local is_guybrush="false"
+    if [[ -e "${shellball_dir}/models/guybrush" ]]; then
+      is_guybrush="true"
+    fi
+
     {
       read # Burn the first line (header line)
       while IFS="," read -r output_name bios_image key_id ec_image brand_code
       do
-        local extra_args=()
-        local full_command=()
-
-        rootkey="$(get_root_key_vbpubk)"
-
-        info "Signing firmware image ${bios_image} for ${output_name}"
-
-        # If there are OEM specific keys available, we're going to use them.
-        # Otherwise, we're going to ignore key_id from the config file and
-        # just use the common keys present in the keyset.
-        #
-        # The presence of the /keyset subdir in the shellball will indicate
-        # whether dynamic signature blocks are available or not.
-        # This is what updater4.sh currently uses to make the decision.
-        if [[ -e "${KEY_DIR}/loem.ini" ]]; then
-          local match
-          local key_index
-
-          # loem.ini has the format KEY_ID_VALUE = KEY_INDEX
-          if ! match="$(grep -E "^[0-9]+ *= *${key_id}$" "${KEY_DIR}/loem.ini")"; then
-            die "The loem key_id ${key_id} not found in loem.ini! (${KEY_DIR}/loem.ini)"
-          fi
-
-          # shellcheck disable=SC2001
-          key_index="$(echo "${match}" | sed 's/ *= *.*$//g')"
-          info "Detected key index from loem.ini as ${key_index} for ${key_id}"
-          if [[ -z "${key_index}" ]]; then
-            die "Failed to extract key_index ${key_id} in loem.ini file for" \
-              "${output_name}"
-          fi
-
-          shellball_keyset_dir="${shellball_dir}/keyset"
-          mkdir -p "${shellball_keyset_dir}"
-          extra_args+=(
-            --loemdir "${shellball_keyset_dir}"
-            --loemid "${output_name}"
-          )
-          rootkey="$(get_root_key_vbpubk "${key_index}")"
-          cp "${rootkey}" "${shellball_keyset_dir}/rootkey.${output_name}"
-        fi
-
-        info "Using root key: ${rootkey##*/}"
-
-        local temp_fw
-        temp_fw=$(make_temp_file)
-
-        local signprivate
-        local keyblock
-        signprivate="$(get_firmware_vbprivk "${key_index}")"
-        keyblock="$(get_firmware_keyblock "${key_index}")"
-
-        # Path to bios.bin.
         local bios_path="${shellball_dir}/${bios_image}"
-
-        echo "Before EC signing ${bios_path}: md5 =" \
-          "$(md5sum "${bios_path}" | awk '{print $1}')"
-
-        if [ -n "${ec_image}" ]; then
-          # Path to ec.bin.
-          local ec_path="${shellball_dir}/${ec_image}"
-
-          # Resign ec.bin.
-          if is_ec_rw_signed "${ec_path}"; then
-            local rw_bin="EC_RW.bin"
-            local rw_hash="EC_RW.hash"
-            # futility writes byproduct files to CWD, so we cd to temp dir.
-            pushd "$(make_temp_dir)" > /dev/null
-            full_command=(
-              do_futility sign
-              --type rwsig
-              --prikey "${KEYCFG_KEY_EC_EFS_VBPRIK2}"
-              --ecrw_out "${rw_bin}"
-              "${ec_path}"
-            )
-            echo "Signing EC with: ${full_command[*]}"
-            "${full_command[@]}" || die "Failed to sign ${ec_path}"
-            # Above command produces EC_RW.bin. Compute its hash.
-            openssl dgst -sha256 -binary "${rw_bin}" > "${rw_hash}"
-            # Store EC_RW.bin and its hash in bios.bin.
-            store_file_in_cbfs "${bios_path}" "${rw_bin}" "ecrw" \
-              || die "Failed to store file in ${bios_path}"
-            store_file_in_cbfs "${bios_path}" "${rw_hash}" "ecrw.hash" \
-              || die "Failed to store file in ${bios_path}"
-            popd > /dev/null
-            info "Signed EC image output to ${ec_path}"
-          fi
+        local ec_path=""
+        if [[ -n "${ec_image}" ]]; then
+          ec_path="${shellball_dir}/${ec_image}"
         fi
 
-        echo "After EC signing ${bios_path}: md5 =" \
-          "$(md5sum "${bios_path}" | awk '{print $1}')"
-
-        # Resign bios.bin.
-        full_command=(
-          do_futility sign
-          --signprivate "${signprivate}"
-          --keyblock "${keyblock}"
-          --kernelkey "${KEYCFG_KERNEL_SUBKEY_VBPUBK}"
-          --version "${FIRMWARE_VERSION}"
-          "${extra_args[@]}"
-          "${bios_path}"
-          "${temp_fw}"
-        )
-        echo "Signing BIOS with: ${full_command[*]}"
-        "${full_command[@]}"
-
-        echo "After BIOS signing ${temp_fw}: md5 =" \
-          "$(md5sum "${temp_fw}" | awk '{print $1}')"
-
-        # For development phases, when the GBB can be updated still, set the
-        # recovery and root keys in the image.
-        full_command=(
-          do_futility gbb
-          -s
-          --recoverykey="${KEYCFG_RECOVERY_KEY_VBPUBK}"
-          --rootkey="${rootkey}" "${temp_fw}"
-          "${bios_path}"
-        )
-        echo "Setting GBB with: ${full_command[*]}"
-        "${full_command[@]}"
-
-        echo "After setting GBB on ${bios_path}: md5 =" \
-          "$(md5sum "${bios_path}" | awk '{print $1}')"
-
-        if [[ -e "${shellball_dir}/models/guybrush" ]]; then
-          echo "Not looking for RO_GSCVD on guybrush, b/263378945"
-        elif futility dump_fmap -p "${bios_path}" | grep -q RO_GSCVD; then
-          # Attempt AP RO verification signing only in case the FMAP includes
-          # the RO_GSCVD section.
-          local arv_root
-
-          if [[ -z ${brand_code} ]]; then
-            die "No brand code for ${bios_path} in signer_config.csv"
-          fi
-
-          arv_root="${KEYCFG_ARV_ROOT_VBPUBK}"
-          if [[ ! -f ${arv_root} ]]; then
-            die "No AP RO verification keys, could not create RO_GSCVD"
-          fi
-
-          # Resign the RO_GSCVD FMAP area.
-          full_command=(
-            do_futility gscvd
-            --keyblock "${KEYCFG_ARV_PLATFORM_KEYBLOCK}"
-            --platform_priv "${KEYCFG_ARV_PLATFORM_VBPRIVK}"
-            --board_id "${brand_code}"
-            --root_pub_key "${arv_root}"
-            "${bios_path}"
-          )
-          if [[ -n ${shellball_keyset_dir} ]]; then
-            full_command+=(
-              --gscvd_out
-              "${shellball_keyset_dir}/gscvd.${output_name}"
-            )
-          fi
-          echo "Setting RO_GSCVD with: ${full_command[*]}"
-          "${full_command[@]}"
-
-          echo "After signing RO_GSCVD on ${bios_path}: md5 =" \
-               "$(md5sum "${bios_path}" | awk '{print $1}')"
-        else
-          echo "No RO_GSCVD section in the image, skipping AP RO signing"
-        fi
-        info "Signed firmware image output to ${bios_path}"
+        resign_firmware_image "${output_name}" "${bios_path}" "${ec_path}" \
+          "${key_id}" "${brand_code}" "${shellball_keyset_dir}" "${is_guybrush}"
       done
       unset IFS
     } < "${signer_config}"
