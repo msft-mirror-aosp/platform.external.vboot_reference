@@ -508,6 +508,51 @@ sign_ec_rw() {
   echo_file_md5 "After EC signing ${bios_path}" "${bios_path}"
 }
 
+# Determine the number of parallel jobs to use for signing.
+get_num_jobs() {
+  local num_jobs="${NUM_JOBS:-${CROS_SIGNING_JOBS:-}}"
+  if [[ -z "${num_jobs}" || ! "${num_jobs}" =~ ^[0-9]+$ || "${num_jobs}" -lt 1 ]]; then
+    if command -v nproc >/dev/null 2>&1; then
+      num_jobs="$(nproc)"
+    else
+      num_jobs=4
+    fi
+  fi
+  echo "${num_jobs}"
+}
+
+# Global counter tracking the number of currently running worker jobs.
+RUNNING_JOBS=0
+
+# Run a task in the background, throttling when running jobs reaches max_jobs.
+# Sets $! for the caller to record in a PID list.
+# Args: MAX_JOBS COMMAND [ARGS...]
+spawn_worker() {
+  local max_jobs="$1"
+  shift
+  if [[ ${RUNNING_JOBS} -ge ${max_jobs} ]]; then
+    wait -n 2>/dev/null || true
+    RUNNING_JOBS=$((RUNNING_JOBS - 1))
+  fi
+  (
+    trap - INT TERM EXIT
+    "$@"
+  ) &
+  RUNNING_JOBS=$((RUNNING_JOBS + 1))
+}
+
+# Wait for a list of PIDs and return 1 if any job failed, 0 otherwise.
+# Args: PIDS...
+wait_pids() {
+  local pid status=0
+  for pid in "$@"; do
+    if ! wait "${pid}"; then
+      status=1
+    fi
+  done
+  return "${status}"
+}
+
 # Resign a BIOS image and set GBB keys (handling LOEM keys if loem.ini is present).
 # Args: OUTPUT_NAME BIOS_PATH KEY_ID SHELLBALL_KEYSET_DIR
 sign_bios() {
@@ -643,14 +688,25 @@ resign_firmware_image() {
 
   echo_file_md5 "Initial ${bios_path}" "${bios_path}"
 
+  local worker_dir
+  worker_dir="$(make_temp_dir)"
+  local temp_bios="${worker_dir}/bios.bin"
+  cp "${bios_path}" "${temp_bios}"
+
+  local temp_ec=""
   if [[ -n "${ec_path}" ]]; then
-    sign_ec_rw "${bios_path}" "${ec_path}"
+    temp_ec="${worker_dir}/ec.bin"
+    cp "${ec_path}" "${temp_ec}"
+    sign_ec_rw "${temp_bios}" "${temp_ec}"
+    mv -f "${temp_ec}" "${ec_path}"
   fi
 
-  sign_bios "${output_name}" "${bios_path}" "${key_id}" \
+  sign_bios "${output_name}" "${temp_bios}" "${key_id}" \
     "${shellball_keyset_dir}"
-  sign_gscvd "${output_name}" "${bios_path}" "${brand_code}" \
+  sign_gscvd "${output_name}" "${temp_bios}" "${brand_code}" \
     "${shellball_keyset_dir}" "${is_guybrush}"
+
+  mv -f "${temp_bios}" "${bios_path}"
 
   info "Signed firmware image output to ${bios_path}"
 }
@@ -706,21 +762,54 @@ resign_firmware_shellball() {
       is_guybrush="true"
     fi
 
+    local num_jobs
+    num_jobs="$(get_num_jobs)"
+    info "Signing firmware with ${num_jobs} jobs in parallel"
+
+    declare -A seen_output_names
+    declare -A bios_to_ec_map
+    local pids=()
+
     {
-      read # Burn the first line (header line)
-      while IFS="," read -r output_name bios_image key_id ec_image brand_code
-      do
+      read -r # Burn the first line (header line)
+      while IFS="," read -r output_name bios_image key_id ec_image brand_code; do
+        # Check that output_name and bios_image are not empty.
+        if [[ -z "${output_name}" || -z "${bios_image}" ]]; then
+          die "Invalid row in ${signer_config}: output_name or bios_image is empty"
+        fi
+
+        # Check that all output_name entries in signer_config.csv are distinct.
+        if [[ -n "${seen_output_names[${output_name}]:-}" ]]; then
+          die "Duplicate output_name '${output_name}' in ${signer_config}"
+        fi
+        seen_output_names["${output_name}"]=1
+
+        # Check that the bios_image to ec_image mapping is unique.
+        if [[ -n "${bios_to_ec_map[${bios_image}]+set}" ]]; then
+          if [[ "${bios_to_ec_map[${bios_image}]}" != "${ec_image}" ]]; then
+            die "bios_image '${bios_image}' maps to multiple distinct" \
+              "ec_images ('${bios_to_ec_map[${bios_image}]}' vs '${ec_image}')" \
+              "in ${signer_config}"
+          fi
+        else
+          bios_to_ec_map["${bios_image}"]="${ec_image}"
+        fi
+
         local bios_path="${shellball_dir}/${bios_image}"
         local ec_path=""
         if [[ -n "${ec_image}" ]]; then
           ec_path="${shellball_dir}/${ec_image}"
         fi
 
-        resign_firmware_image "${output_name}" "${bios_path}" "${ec_path}" \
-          "${key_id}" "${brand_code}" "${shellball_keyset_dir}" "${is_guybrush}"
+        spawn_worker "${num_jobs}" resign_firmware_image \
+          "${output_name}" "${bios_path}" "${ec_path}" "${key_id}" \
+          "${brand_code}" "${shellball_keyset_dir}" "${is_guybrush}"
+        pids+=($!)
       done
       unset IFS
     } < "${signer_config}"
+
+    wait_pids "${pids[@]}" || die "One or more firmware image signing workers failed."
   else
     local image_file sign_args=() loem_sfx loem_output_dir
     for image_file in "${shellball_dir}"/bios*.bin; do
