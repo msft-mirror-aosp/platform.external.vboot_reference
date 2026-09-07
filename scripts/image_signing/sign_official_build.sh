@@ -451,8 +451,12 @@ resign_firmware_payload() {
   rootfs_dir=$(make_temp_dir)
   mount_loop_image_partition "${loopdev}" 3 "${rootfs_dir}"
 
+  local board_name
+  board_name="$(get_boardvar_from_lsb_release "${rootfs_dir}")"
+
   local ret=0
-  resign_firmware_shellball "${rootfs_dir}/usr/sbin/chromeos-firmwareupdate" || ret=$?
+  resign_firmware_shellball "${rootfs_dir}/usr/sbin/chromeos-firmwareupdate" \
+    "${board_name}" || ret=$?
   sudo umount "${rootfs_dir}"
   if [[ "${ret}" == 0 ]]; then
     info "Re-signed firmware AU payload in ${loopdev}"
@@ -629,17 +633,14 @@ sign_bios() {
 }
 
 # Sign RO_GSCVD FMAP section if present.
-# Args: OUTPUT_NAME BIOS_PATH BRAND_CODE SHELLBALL_KEYSET_DIR IS_GUYBRUSH
+# Args: OUTPUT_NAME BIOS_PATH BRAND_CODE SHELLBALL_KEYSET_DIR
 sign_gscvd() {
   local output_name="$1"
   local bios_path="$2"
   local brand_code="$3"
   local shellball_keyset_dir="$4"
-  local is_guybrush="$5"
 
-  if [[ "${is_guybrush}" == "true" ]]; then
-    echo "Not looking for RO_GSCVD on guybrush, b/263378945"
-  elif futility dump_fmap -p "${bios_path}" | grep -q RO_GSCVD; then
+  if futility dump_fmap -p "${bios_path}" | grep -q RO_GSCVD; then
     if [[ -z "${brand_code}" ]]; then
       die "No brand code for ${bios_path} in signer_config.csv"
     fi
@@ -674,7 +675,7 @@ sign_gscvd() {
 }
 
 # Resign a firmware image for a specific model: EC RW, BIOS, and RO_GSCVD.
-# Args: OUTPUT_NAME BIOS_PATH EC_PATH KEY_ID BRAND_CODE SHELLBALL_KEYSET_DIR IS_GUYBRUSH
+# Args: OUTPUT_NAME BIOS_PATH EC_PATH KEY_ID BRAND_CODE SHELLBALL_KEYSET_DIR [BOARD_NAME]
 resign_firmware_image() {
   local output_name="$1"
   local bios_path="$2"
@@ -682,7 +683,7 @@ resign_firmware_image() {
   local key_id="$4"
   local brand_code="$5"
   local shellball_keyset_dir="$6"
-  local is_guybrush="$7"
+  local board_name="${7:-}"
 
   info "Signing firmware image $(basename "${bios_path}") for ${output_name}"
 
@@ -703,8 +704,12 @@ resign_firmware_image() {
 
   sign_bios "${output_name}" "${temp_bios}" "${key_id}" \
     "${shellball_keyset_dir}"
-  sign_gscvd "${output_name}" "${temp_bios}" "${brand_code}" \
-    "${shellball_keyset_dir}" "${is_guybrush}"
+  if [[ "${board_name}" == *guybrush* ]]; then
+    echo "Not looking for RO_GSCVD on guybrush, b/263378945"
+  else
+    sign_gscvd "${output_name}" "${temp_bios}" "${brand_code}" \
+      "${shellball_keyset_dir}"
+  fi
 
   mv -f "${temp_bios}" "${bios_path}"
 
@@ -712,9 +717,10 @@ resign_firmware_image() {
 }
 
 # Re-sign the firmware AU payload provided with a new key.
-# Args: firmware_bundle
+# Args: firmware_bundle [board_name]
 resign_firmware_shellball() {
-  local firmware_bundle=$1
+  local firmware_bundle="$1"
+  local board_name="${2:-}"
 
   local shellball_dir
   shellball_dir=$(make_temp_dir)
@@ -755,11 +761,6 @@ resign_firmware_shellball() {
     if [[ -e "${KEY_DIR}/loem.ini" ]]; then
       shellball_keyset_dir="${shellball_dir}/keyset"
       mkdir -p "${shellball_keyset_dir}"
-    fi
-
-    local is_guybrush="false"
-    if [[ -e "${shellball_dir}/models/guybrush" ]]; then
-      is_guybrush="true"
     fi
 
     local num_jobs
@@ -803,7 +804,7 @@ resign_firmware_shellball() {
 
         spawn_worker "${num_jobs}" resign_firmware_image \
           "${output_name}" "${bios_path}" "${ec_path}" "${key_id}" \
-          "${brand_code}" "${shellball_keyset_dir}" "${is_guybrush}"
+          "${brand_code}" "${shellball_keyset_dir}" "${board_name}"
         pids+=($!)
       done
       unset IFS
@@ -1614,7 +1615,7 @@ main() {
     sign_firmware "${OUTPUT_IMAGE}" "${KEY_DIR}" "${FIRMWARE_VERSION}"
   elif [[ "${TYPE}" == "shellball" ]]; then
     cp "${INPUT_IMAGE}" "${OUTPUT_IMAGE}"
-    resign_firmware_shellball "${OUTPUT_IMAGE}"
+    resign_firmware_shellball "${OUTPUT_IMAGE}" "${BOARD:-}"
     info "Signed firmware shellball ${OUTPUT_IMAGE}"
   elif [[ "${TYPE}" == "update_payload" ]]; then
     sign_update_payload "${INPUT_IMAGE}" "${KEYCFG_UPDATE_KEY_PEM}" "${OUTPUT_IMAGE}"
