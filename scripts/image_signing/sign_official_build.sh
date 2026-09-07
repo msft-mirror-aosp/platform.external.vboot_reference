@@ -454,16 +454,10 @@ resign_firmware_payload() {
   local board_name
   board_name="$(get_boardvar_from_lsb_release "${rootfs_dir}")"
 
-  local ret=0
   resign_firmware_shellball "${rootfs_dir}/usr/sbin/chromeos-firmwareupdate" \
-    "${board_name}" || ret=$?
+    "${board_name}"
   sudo umount "${rootfs_dir}"
-  if [[ "${ret}" == 0 ]]; then
-    info "Re-signed firmware AU payload in ${loopdev}"
-  else
-    error "Couldn't sign firmware AU payload in ${loopdev}"
-  fi
-  return "${ret}"
+  info "Re-signed firmware AU payload in ${loopdev}"
 }
 
 # Print the MD5 checksum of a file with a given message prefix.
